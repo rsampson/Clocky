@@ -19,6 +19,7 @@
 #include <Adafruit_SSD1306.h>
 #include <Fonts/FreeSans24pt7b.h>
 #include <Fonts/FreeSans18pt7b.h>
+#include <Fonts/FreeSans12pt7b.h>
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
@@ -197,12 +198,9 @@ void setup() {
   digitalWrite(LED_BUILTIN, HIGH); 
 
   pinMode(BUZZER_PIN, OUTPUT);  
-  tone(BUZZER_PIN, 415, 500);
-  delay(500 * 1.3);
-  tone(BUZZER_PIN, 466, 500);
-  delay(500 * 1.3);
-  tone(BUZZER_PIN, 370, 1000);
-  delay(1000 * 1.3);
+
+  tone(BUZZER_PIN, 2020, 1000);
+  delay(1000);
   noTone(BUZZER_PIN);
 
   pinMode(buttonPin, INPUT_PULLUP); 
@@ -245,14 +243,14 @@ void setup() {
 
 void displayTime(void) {  // display mode set by push button
   char buf[20];
-  hourFormat12();
 
   sprintf(buf, "%02d:%02d:%02d %02d/%02d",  hour(), minute(), second(),  month(), day()); 
   ESPUI.updateLabel(timeLabel, buf);
 
   display.clearDisplay();
-  display.setFont(&FreeSans24pt7b);
-  display.setCursor(3, 31);
+
+  int hr = hour() % 12;
+  if (hr == 0) hr = 12;  
 
   switch (buttonPressCounter % 4) {
   case 0:
@@ -261,14 +259,18 @@ void displayTime(void) {  // display mode set by push button
     sprintf(buf, "   %s", dayShortStr(weekday()) );     
     break;
   case 1:
-    sprintf(buf, "%2d:%02d",  hour(), minute()); 
+    display.setFont(&FreeSans24pt7b);
+    display.setCursor(3, 31);
+    sprintf(buf, "%2d:%02d",  hr, minute()); 
     break;
   case 2:
-    display.setFont(&FreeSans18pt7b);
+    display.setFont(&FreeSans12pt7b);
     display.setCursor(0, 25);
     sprintf(buf, " %s %2d",  monthShortStr(month()), day()); 
     break;
-  case 3:
+  case 3: // quiet (dark) mode
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(3, 31);
     sprintf(buf, "    ."); 
     display.startscrollright(0x00, 0x0F);
     break;
@@ -279,15 +281,29 @@ void displayTime(void) {  // display mode set by push button
 
 void runAlarm() {
 
-  if (disable) {
+ time_t t = now();   // Store the current time atomically
+ 
+ int hr = hour(t) % 12;
+ if (hr == 0) hr = 12;
+
+ // process hourly chime if not in quiet mode
+ if (minute(t) == 0 && second(t) == 0 &&  (buttonPressCounter % 4) != 3) {   
+    for( int i = 0; i < hr; i++) {
+      tone(BUZZER_PIN, 2020, 300);
+      delay(700);
+      noTone(BUZZER_PIN);
+    }
+    delay(400); // prevent reentrance
+  }      
+
+  if (disable) {  // bail out if alarm is disabled
     return;
   }
-
-  time_t t = now();   // Store the current time atomically
+  // process alarm
   if (hour(t) == runHour && minute(t) == runMinute && second(t) == 0 ) {   
-    for( int j = 0; j < 20; j++) {
-      tone(BUZZER_PIN, 2000, 100);
-      delay(100);
+   for( int j = 0; j < 30; j++) {
+      tone(BUZZER_PIN, 2020, 200); 
+      delay(200);
       noTone(BUZZER_PIN);
     }
   }
@@ -332,7 +348,7 @@ void loop() {
    // end button processing
 
 
-  if (millis() > previousTime + 1000) {                    // update gui once per second
+  if (millis() > previousTime + 990) {                    // update gui (slighly more than) once per second
 
     fetchDebugText();
     ESPUI.updateLabel(debugLabel, String(charBuf));

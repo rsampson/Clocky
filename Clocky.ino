@@ -21,8 +21,8 @@
 #include <Fonts/FreeSans18pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 32 // OLED display height, in pixels
+#define SCREEN_WIDTH 128  // OLED display width, in pixels
+#define SCREEN_HEIGHT 32  // OLED display height, in pixels
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
@@ -31,9 +31,9 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 #ifndef LED_BUILTIN
 #define LED_BUILTIN 2
 #endif
-#define BUZZER_PIN  D6
+#define BUZZER_PIN D6
 
-// mode switch 
+// mode switch
 const int buttonPin = 14;  // the number of the pushbutton pin
 
 int buttonState;            // the current reading from the input pin
@@ -99,6 +99,7 @@ void SaveWifiDetailsCallback(Control *sender, int type);
 void SaveSheduleCallback(Control *sender, int type);
 void paramCallback(Control *sender, int type, int param);
 void runAlarm(void);
+void webPrint(const char *format, ...);
 
 //ESPUI=================================================================================================================
 
@@ -116,7 +117,7 @@ uint16_t runMinute = 10;  // minute to start running
 const size_t bufferSize = 400;  // debug buffer
 char charBuf[bufferSize];
 
-bool disable = false;      // flag to disable/enable alarm
+bool disable = false;  // flag to disable/enable alarm
 
 void getBootReasonMessage(char *buffer, int bufferlength) {
 #if defined(ARDUINO_ARCH_ESP32)
@@ -174,13 +175,13 @@ void getBootReasonMessage(char *buffer, int bufferlength) {
 #endif
 }
 
-time_t getNtpTime(void){  // return time zone and DST adjusted time from server
+time_t getNtpTime(void) {  // return time zone and DST adjusted time from server
   // US Pacific Time Zone (Las Vegas, Los Angeles)
   TimeChangeRule usPDT = { "PDT", Second, Sun, Mar, 2, -420 };
   TimeChangeRule usPST = { "PST", First, Sun, Nov, 2, -480 };
-  Timezone usPT(usPDT, usPST);  
-  time_t serv_time =   usPT.toLocal(timeClient.getEpochTime());
-  return(serv_time);
+  Timezone usPT(usPDT, usPST);
+  time_t serv_time = usPT.toLocal(timeClient.getEpochTime());
+  return (serv_time);
 }
 
 #define BOOT_REASON_MESSAGE_SIZE 150
@@ -195,15 +196,15 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);  // set heartbeat LED pin to OUTPUT
   digitalWrite(LED_BUILTIN, LOW);
   delay(50);
-  digitalWrite(LED_BUILTIN, HIGH); 
+  digitalWrite(LED_BUILTIN, HIGH);
 
-  pinMode(BUZZER_PIN, OUTPUT);  
+  pinMode(BUZZER_PIN, OUTPUT);
 
   tone(BUZZER_PIN, 2020, 1000);
   delay(1000);
   noTone(BUZZER_PIN);
 
-  pinMode(buttonPin, INPUT_PULLUP); 
+  pinMode(buttonPin, INPUT_PULLUP);
 
   if (!preferences.begin("Settings")) {
     Serial.println("Failed to open preferences.");
@@ -211,7 +212,7 @@ void setup() {
   }
   connectWifi();
 
-  timeClient.begin();   // set up ntp time client and then initialize time library
+  timeClient.begin();  // set up ntp time client and then initialize time library
   timeClient.update();
   setTime(getNtpTime());
   setSyncProvider(getNtpTime);
@@ -224,18 +225,19 @@ void setup() {
 
   disable = preferences.getBool("disable", "0");
   ESPUI.updateSwitcher(mainSwitcher, disable);
- 
+
   ElegantOTA.begin(ESPUI.WebServer());
   // boot up message
-  webPrint( "%s up at: %s on %s\n", HOSTNAME, timeClient.getFormattedTime(), dayStr(weekday()));
+  webPrint("%s up at: %s on %s\n", HOSTNAME, timeClient.getFormattedTime(), dayStr(weekday()));
   getBootReasonMessage(bootReasonMessage, BOOT_REASON_MESSAGE_SIZE);
   webPrint("Reset reason: %s\n", bootReasonMessage);
 
-   if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { // Address 0x3D for 128x64
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {  // Address 0x3D for 128x64
     Serial.println(F("SSD1306 allocation failed"));
-    for(;;);
+    for (;;)
+      ;
   }
-  
+
   display.setTextColor(WHITE);
 
   Serial.println("We Are Go!");
@@ -244,68 +246,78 @@ void setup() {
 void displayTime(void) {  // display mode set by push button
   char buf[20];
 
-  sprintf(buf, "%02d:%02d:%02d %02d/%02d",  hour(), minute(), second(),  month(), day()); 
+  sprintf(buf, "%02d:%02d:%02d %02d/%02d", hour(), minute(), second(), month(), day());
   ESPUI.updateLabel(timeLabel, buf);
 
   display.clearDisplay();
 
   int hr = hour() % 12;
-  if (hr == 0) hr = 12;  
+  if (hr == 0) hr = 12;
 
-  switch (buttonPressCounter % 4) {
-  case 0:
-    display.setFont(&FreeSans18pt7b);
-    display.setCursor(0, 25);
-    sprintf(buf, "   %s", dayShortStr(weekday()) );     
-    break;
-  case 1:
-    display.setFont(&FreeSans24pt7b);
-    display.setCursor(3, 31);
-    sprintf(buf, "%2d:%02d",  hr, minute()); 
-    break;
-  case 2:
-    display.setFont(&FreeSans12pt7b);
-    display.setCursor(0, 25);
-    sprintf(buf, " %s %2d",  monthShortStr(month()), day()); 
-    break;
-  case 3: // quiet (dark) mode
-    display.setFont(&FreeSans12pt7b);
-    display.setCursor(3, 31);
-    sprintf(buf, "    ."); 
-    display.startscrollright(0x00, 0x0F);
-    break;
-}
+  switch (buttonPressCounter % 3) {
+    case 0:
+      switch (second() % 5) {
+        case 0:
+          display.setFont(&FreeSans18pt7b);
+          display.setCursor(0, 28);
+          sprintf(buf, "   %s", dayShortStr(weekday()));
+          break;
+        case 1:  // display time 3 times longer than day of week or date
+        case 2:
+        case 3:
+          display.setFont(&FreeSans24pt7b);
+          display.setCursor(3, 31);
+          sprintf(buf, "%2d:%02d", hr, minute());
+          break;
+        case 4:
+          display.setFont(&FreeSans12pt7b);
+          display.setCursor(12, 25);
+          sprintf(buf, " %s %2d", monthShortStr(month()), day());
+          break;
+      }
+      break;
+    case 1:
+      // set into sleep mode
+      display.setFont(&FreeSans12pt7b);
+      display.setCursor(3, 16);
+      sprintf(buf, "      .");
+      display.startscrollright(0x00, 0x0F);
+      break;
+    case 2:
+      noTone(BUZZER_PIN);  // kill alarm
+      buttonPressCounter = 0;
+      display.clearDisplay();
+      sprintf(buf, " ");
+      break;
+  }
   display.print(buf);
-  display.display(); 
+  display.display();
 }
 
 void runAlarm() {
 
- time_t t = now();   // Store the current time atomically
- 
- int hr = hour(t) % 12;
- if (hr == 0) hr = 12;
+  time_t t = now();  // Store the current time atomically
 
- // process hourly chime if not in quiet mode
- if (minute(t) == 0 && second(t) == 0 &&  (buttonPressCounter % 4) != 3) {   
-    for( int i = 0; i < hr; i++) {
+  int hr = hour(t) % 12;
+  if (hr == 0) hr = 12;
+
+  // process hourly chime if not in quiet mode
+  if (minute(t) == 0 && second(t) == 0 && (buttonPressCounter % 3) != 1) {
+    for (int i = 0; i < hr; i++) {
       tone(BUZZER_PIN, 2020, 300);
       delay(700);
       noTone(BUZZER_PIN);
     }
-    delay(400); // prevent reentrance
-  }      
+    delay(400);  // prevent reentrance
+  }
 
   if (disable) {  // bail out if alarm is disabled
     return;
   }
   // process alarm
-  if (hour(t) == runHour && minute(t) == runMinute && second(t) == 0 ) {   
-   for( int j = 0; j < 30; j++) {
-      tone(BUZZER_PIN, 2020, 200); 
-      delay(200);
-      noTone(BUZZER_PIN);
-    }
+  if (hour(t) == runHour && minute(t) == runMinute && second(t) == 0) {
+    webPrint("Alarm run at: %d hour and %d minutes\n", runHour, runMinute);
+    tone(BUZZER_PIN, 2020);
   }
 }
 
@@ -314,13 +326,13 @@ bool ap_mode = true;
 
 void loop() {
   timeClient.update();  // run ntp time client
-  runAlarm();  // activate alarm if correct time
+  runAlarm();           // activate alarm if correct time
   ElegantOTA.loop();
 
-   // start button processing
+  // start button processing
   int reading = digitalRead(buttonPin);
 
-    // If the switch changed, due to noise or pressing:
+  // If the switch changed, due to noise or pressing:
   if (reading != lastButtonState) {
     // reset the debouncing timer
     lastDebounceTime = millis();
@@ -337,18 +349,19 @@ void loop() {
       if (buttonState == HIGH) {
         display.stopscroll();
         buttonPressCounter++;
-        previousTime -= 1000; // change display instantly
+        tone(BUZZER_PIN, 2020, 20);
+        previousTime -= 1000;  // change display instantly
         webPrint("Button press count: %02d\n", buttonPressCounter);
       }
     }
   }
 
-   // save the reading. Next time through the loop, it'll be the lastButtonState:
+  // save the reading. Next time through the loop, it'll be the lastButtonState:
   lastButtonState = reading;
-   // end button processing
+  // end button processing
 
 
-  if (millis() > previousTime + 990) {                    // update gui (slighly more than) once per second
+  if (millis() > previousTime + 990) {  // update gui (slighly more than) once per second
 
     fetchDebugText();
     ESPUI.updateLabel(debugLabel, String(charBuf));
@@ -413,8 +426,8 @@ void connectWifi() {
     if (!MDNS.begin(HOSTNAME)) {
       Serial.println("Error setting up MDNS responder!");
     }
-      // Add service to MDNS-SD
-      //MDNS.addService("http", "tcp", 80);
+    // Add service to MDNS-SD
+    //MDNS.addService("http", "tcp", 80);
   } else {
     ap_mode = true;
     Serial.println("\nCreating access point...");

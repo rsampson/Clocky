@@ -52,7 +52,6 @@ void setUpUI() {
   hourNumber = ESPUI.addControl(Number, "Run Hour", "12", Wetasphalt, grouptab, hourCallback);
   ESPUI.addControl(Min, "", "0", None, hourNumber);
   ESPUI.addControl(Max, "", "23", None, hourNumber);
-  //Number inputs also accept Min and Max components, but you should still validate the values.
   minuteNumber = ESPUI.addControl(Number, "Run Minute", "0", Wetasphalt, grouptab, minuteCallback);
   ESPUI.addControl(Min, "", "0", None, minuteNumber);
   ESPUI.addControl(Max, "", "60", None, minuteNumber); 

@@ -28,12 +28,16 @@ void textCallback(Control *sender, int type) {
 void SaveScheduleCallback(Control *sender, int type) {
   if (type == B_UP) {
     // store run hour and minute
-    stored_hour =   ESPUI.getControl(hourNumber)->value;  // RAS
+    stored_hour =   ESPUI.getControl(hourNumber)->value;  
     stored_minute = ESPUI.getControl(minuteNumber)->value;
+
+    runHour = stored_hour.toInt();
+    runMinute= stored_minute.toInt();
         
     preferences.putString("hour", stored_hour);
     preferences.putString("minute", stored_minute);
- 
+
+    webPrint("Saved %s alarm hour: %d and minute: %d\n", disable ? "disabled" : "active", runHour, runMinute);
   }
 }
 //END: Alarm schedule settings settings callback===============================
@@ -59,16 +63,17 @@ void switchCallback(Control* sender, int type)
 {
     switch (type)
     {
-    case S_ACTIVE:
+    case S_INACTIVE:
         disable = true;
         preferences.putBool("disable", true);
         break;
 
-    case S_INACTIVE:
+    case S_ACTIVE:
         disable = false;
         preferences.putBool("disable", false);
         break;
     }
+    Serial.println(disable ? "disable" : "active");
    generalCallback(sender, type);
 }
 

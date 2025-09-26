@@ -11,7 +11,7 @@
 
 // Tested on ESP32 Wemos Lolin32  and ESP12-F (esp8266), make sure these match your board,
 // otherwise strange results will occur.
-//Settings
+
 #define HOSTNAME "clocky"
 
 #include <Wire.h>
@@ -20,6 +20,7 @@
 #include <Fonts/FreeSans24pt7b.h>
 #include <Fonts/FreeSans18pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
+#include <Arduino.h>
 
 #define SCREEN_WIDTH 128  // OLED display width, in pixels
 #define SCREEN_HEIGHT 32  // OLED display height, in pixels
@@ -27,25 +28,17 @@
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-#include <Arduino.h>
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 2
-#endif
-#define BUZZER_PIN D6
+const int BUZZER_PIN = D6;
+const int SensorPin = D7;  // this input connects directly to the touch pad
+const int DriverPin = D3;  // this output connect to the touch pad trough a 300k resistor
+const int treshold = 18;   // minimum micro sec delay caused by body capacity
+const int ledPin = D4;
+const int highTone = 2217;  // tones for hour chime
+const int lowTone = 1975;
 
-// mode switch
-const int buttonPin = 14;  // the number of the pushbutton pin
-
-int buttonState;            // the current reading from the input pin
-int lastButtonState = LOW;  // the previous reading from the input pin
-int buttonPressCounter;     // how many times the button has been pressed
-
-// the following variables are unsigned longs because the time, measured in
-// milliseconds, will quickly become a bigger number than can be stored in an int.
-unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
-unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
-// end mode switch
-
+bool buttonState;  // the current reading from the input pin
+//bool lastButtonState = LOW;  // the previous reading from the input pin
+unsigned int buttonPressCounter;  // how many times the button has been pressed
 
 #if defined(ESP32)
 #include <WiFi.h>
@@ -193,18 +186,12 @@ void setup() {
 
   Serial.begin(115200);
 
-  pinMode(LED_BUILTIN, OUTPUT);  // set heartbeat LED pin to OUTPUT
-  digitalWrite(LED_BUILTIN, LOW);
-  delay(50);
-  digitalWrite(LED_BUILTIN, HIGH);
-
   pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(DriverPin, OUTPUT);
+  pinMode(SensorPin, INPUT);
+  pinMode(ledPin, OUTPUT);
 
-  tone(BUZZER_PIN, 2020, 1000);
-  delay(1000);
-  noTone(BUZZER_PIN);
-
-  pinMode(buttonPin, INPUT_PULLUP);
+  tone(BUZZER_PIN, highTone, 1000);
 
   if (!preferences.begin("Settings")) {
     Serial.println("Failed to open preferences.");
@@ -243,9 +230,11 @@ void setup() {
   Serial.println("We Are Go!");
 }
 
-void displayTime(void) {  // display mode set by push button
-  char buf[20];
+unsigned int deltaTime;
 
+void displayTime(void) {  // display mode set by push button
+
+  char buf[20];
   sprintf(buf, "%02d:%02d:%02d %02d/%02d", hour(), minute(), second(), month(), day());
   ESPUI.updateLabel(timeLabel, buf);
 
@@ -255,7 +244,13 @@ void displayTime(void) {  // display mode set by push button
   if (hr == 0) hr = 12;
 
   switch (buttonPressCounter % 3) {
-    case 0:
+    case 0:                       // initial state
+      digitalWrite(ledPin, LOW);  // turn on the night lite
+      noTone(BUZZER_PIN);         // kill alarm
+      sprintf(buf, " ");
+      break;
+    case 1:                        // clock display state
+      digitalWrite(ledPin, HIGH);  // turn off the night lite
       switch (second() % 5) {
         case 0:
           display.setFont(&FreeSans18pt7b);
@@ -268,6 +263,7 @@ void displayTime(void) {  // display mode set by push button
           display.setFont(&FreeSans24pt7b);
           display.setCursor(3, 31);
           sprintf(buf, "%2d:%02d", hr, minute());
+          //sprintf(buf, "%3d", deltaTime);
           break;
         case 4:
           display.setFont(&FreeSans12pt7b);
@@ -276,18 +272,11 @@ void displayTime(void) {  // display mode set by push button
           break;
       }
       break;
-    case 1:
-      // set into sleep mode
+    case 2:  // sleep state
       display.setFont(&FreeSans12pt7b);
       display.setCursor(3, 16);
       sprintf(buf, "      .");
       display.startscrollright(0x00, 0x0F);
-      break;
-    case 2:
-      noTone(BUZZER_PIN);  // kill alarm
-      buttonPressCounter = 0;
-      display.clearDisplay();
-      sprintf(buf, " ");
       break;
   }
   display.print(buf);
@@ -302,9 +291,11 @@ void runAlarm() {
   if (hr == 0) hr = 12;
 
   // process hourly chime if not in quiet mode
-  if (minute(t) == 0 && second(t) == 0 && (buttonPressCounter % 3) != 1) {
+  if (minute(t) == 0 && second(t) == 0 && (buttonPressCounter % 3) != 2) {
     for (int i = 0; i < hr; i++) {
-      tone(BUZZER_PIN, 2020, 300);
+      tone(BUZZER_PIN, highTone, 150);  // c#7
+      delay(300);
+      tone(BUZZER_PIN, lowTone, 250);  // b6
       delay(700);
       noTone(BUZZER_PIN);
     }
@@ -317,52 +308,57 @@ void runAlarm() {
   // process alarm
   if (hour(t) == runHour && minute(t) == runMinute && second(t) == 0) {
     webPrint("Alarm run at: %d hour and %d minutes\n", runHour, runMinute);
-    tone(BUZZER_PIN, 2020);
+    tone(BUZZER_PIN, highTone);
   }
+}
+
+
+
+bool readTouch(void) {  // read the state of the touch pad switch
+  digitalWrite(DriverPin, LOW); // Initialize sensor pin to ground level
+  delay(1);
+  digitalWrite(DriverPin, HIGH); // now drive the sensor pin high
+  unsigned int bailOutCounter = 0;
+  unsigned int timerVal = micros();
+  while (digitalRead(SensorPin) != HIGH && bailOutCounter < 1000) { bailOutCounter++; }  // time how long it takes for the input to follow the output
+  if (bailOutCounter == 1000) return (true);
+  deltaTime = micros() - timerVal;
+  return (deltaTime >= treshold);   // If it takes longer than the treshold time to go high, declair that the pad is touched
 }
 
 long unsigned previousTime;
 bool ap_mode = true;
+uint16_t trueSum;
 
 void loop() {
   timeClient.update();  // run ntp time client
   runAlarm();           // activate alarm if correct time
   ElegantOTA.loop();
 
-  // start button processing
-  int reading = digitalRead(buttonPin);
-
-  // If the switch changed, due to noise or pressing:
-  if (reading != lastButtonState) {
-    // reset the debouncing timer
-    lastDebounceTime = millis();
+  trueSum = 0;
+  for (int i = 0; i < 10; i++) {  // read pad 10 times and vote on it's state for debouncing
+    if (readTouch() == true) trueSum++;
+    delay(2);
   }
+  bool reading = (trueSum > 6 ? HIGH : LOW);
 
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    // whatever the reading is at, it's been there for longer than the debounce
-    // delay, so take it as the actual current state:
-
-    // if the button state has changed:
-    if (reading != buttonState) {
-      buttonState = reading;
-      // only advance counter if the new button state is HIGH
-      if (buttonState == HIGH) {
-        display.stopscroll();
-        buttonPressCounter++;
-        tone(BUZZER_PIN, 2020, 20);
-        previousTime -= 1000;  // change display instantly
-        webPrint("Button press count: %02d\n", buttonPressCounter);
-      }
+  // if the button state has changed:
+  if (reading != buttonState) {
+    buttonState = reading;
+    // only advance counter if the new button state is HIGH
+    if (buttonState == HIGH) {
+      display.stopscroll();
+      buttonPressCounter++;
+      tone(BUZZER_PIN, 2020, 30);
+      delay(30);
+      previousTime -= 1000;  // force display update (below)
+      webPrint("Button press count: %02d\n", buttonPressCounter);
     }
   }
-
-  // save the reading. Next time through the loop, it'll be the lastButtonState:
-  lastButtonState = reading;
   // end button processing
 
-
   if (millis() > previousTime + 990) {  // update gui (slighly more than) once per second
-
+    previousTime = millis();
     fetchDebugText();
     ESPUI.updateLabel(debugLabel, String(charBuf));
     ESPUI.updateLabel(signalLabel, String(WiFi.RSSI()) + " dbm");
@@ -373,8 +369,6 @@ void loop() {
     } else {
       ESPUI.updateTime(mainTime);  // get time from browser, we are not connect to the NTP server
     }
-
-    previousTime = millis();
   }
 #if !defined(ESP32)
   //We don't need to call this explicitly on ESP32 but we do on 8266
@@ -426,8 +420,7 @@ void connectWifi() {
     if (!MDNS.begin(HOSTNAME)) {
       Serial.println("Error setting up MDNS responder!");
     }
-    // Add service to MDNS-SD
-    //MDNS.addService("http", "tcp", 80);
+
   } else {
     ap_mode = true;
     Serial.println("\nCreating access point...");

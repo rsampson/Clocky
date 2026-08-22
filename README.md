@@ -29,17 +29,45 @@ A simple desk clock for the ESP8266 / ESP32 with a web interface for configurati
 
 The touch pad is the only input for switching the clock between desk clock mode and sleep mode, so it is not optional. It works by wiring the conductor directly to input pin D7, and also to output pin D3 through a 300k resistor. Touching the pad adds body capacitance to the circuit, which slows the signal from the driver pin to the sensor pin — this delay is what the firmware detects to register a touch.
 
-Pin assignments and other hardware constants can be changed in [`config.h`](config.h).
+Pin assignments and other hardware constants can be changed in [`src/config.h`](src/config.h).
+
+## Building and Flashing
+
+This is a [PlatformIO](https://platformio.org/) project (see [`platformio.ini`](platformio.ini) for the board configuration and library dependencies).
+
+```bash
+pio run                       # build
+pio run -t upload             # build and flash over serial
+pio device monitor            # serial monitor (115200 baud)
+```
 
 ## Getting Started
 
-1. Flash the firmware using [PlatformIO](https://platformio.org/) (see `platformio.ini` for the board configuration and library dependencies).
+1. Flash the firmware as above.
 2. On first boot, the clock starts its own access point. Connect to it and open `192.168.4.1` in a browser.
 3. Enter your Wi-Fi router's SSID and password to join the clock to your LAN.
 4. Once connected, the clock is reachable at `clocky.local` (mDNS) or the IP assigned by your router.
-5. Use the web interface to set the time zone, configure the alarm, and perform OTA firmware updates.
+5. Use the web interface to set the time zone, configure the alarm, and perform OTA firmware updates (no serial connection needed after this point).
+
+## Project Structure
+
+```
+platformio.ini    Board configuration and library dependencies
+src/
+  config.h         Hardware constants: pins, display size, tones, touch sensitivity
+  Clocky.cpp        Entry point (setup/loop)
+  wifi_manager.*     Wi-Fi connection state machine / AP fallback
+  time_manager.*      NTP sync and time zone handling
+  ui.h / gui.cpp        ESPUI web interface
+  callback.cpp           ESPUI control callbacks
+  debug.cpp                Heap/debug telemetry
+```
 
 ## Notes
 
-- Confirm the board setting in [`config.h`](config.h) matches your actual hardware (ESP32 vs. ESP8266) — a mismatch will cause unpredictable behavior.
-- The default hostname is `clocky`; this can be changed in [`config.h`](config.h).
+- Confirm the board setting in [`src/config.h`](src/config.h) matches your actual hardware (ESP32 vs. ESP8266) — a mismatch will cause unpredictable behavior.
+- The default hostname is `clocky`; this can be changed in [`src/config.h`](src/config.h).
+
+## License
+
+[MIT](src/LICENSE)

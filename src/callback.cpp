@@ -1,3 +1,10 @@
+#include <Arduino.h>
+#include <ESPUI.h>
+
+#include "clocky.h"
+#include "time_manager.h"
+#include "wifi_manager.h"
+
 //Most elements in this test UI are assigned this generic callback which prints some
 //basic information. Event types are defined in ESPUI.h
 void generalCallback(Control *sender, int type) {
@@ -28,8 +35,8 @@ void textCallback(Control *sender, int type) {
 void SaveScheduleCallback(Control *sender, int type) {
   if (type == B_UP) {
     // store run hour and minute
-    stored_hour =   ESPUI.getControl(hourNumber)->value;  
-    stored_minute = ESPUI.getControl(minuteNumber)->value;
+    stored_hour =   ESPUI.getControl(ui.hourNumber)->value;
+    stored_minute = ESPUI.getControl(ui.minuteNumber)->value;
 
     runHour = stored_hour.toInt();
     runMinute= stored_minute.toInt();
@@ -80,14 +87,29 @@ void switchCallback(Control* sender, int type)
 //WiFi settings callback=====================================================
 void SaveWifiDetailsCallback(Control *sender, int type) {
   if (type == B_UP) {
-    stored_ssid = ESPUI.getControl(wifi_ssid_text)->value;
-    stored_pass = ESPUI.getControl(wifi_pass_text)->value;
+    stored_ssid = ESPUI.getControl(ui.wifi_ssid_text)->value;
+    stored_pass = ESPUI.getControl(ui.wifi_pass_text)->value;
 
     preferences.putString("ssid", stored_ssid);
     preferences.putString("pass", stored_pass);
+
+    // apply immediately and let handleWiFi() reconnect with the new credentials
+    currentWifiState = WIFI_STATE_DISCONNECTED;
   }
 }
 //WiFi settings callback=====================================================
+
+
+//Timezone selection callback=================================
+void TZcallback(Control *sender, int type) {
+  tz = TZstringToPointer(sender->value);
+  preferences.putString("tz", sender->value);
+  printTZ(tz);
+  setTime(getNtpTime());
+
+  generalCallback(sender, type);
+}
+//Timezone selection callback=================================
 
 
 //ESP Reset=================================

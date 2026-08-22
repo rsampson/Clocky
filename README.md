@@ -7,9 +7,12 @@ A simple desk clock for the ESP8266 / ESP32 with a web interface for configurati
 - Synchronizes time over NTP and automatically corrects for daylight saving time.
 - Web interface for setting the time zone, alarm, and Wi-Fi credentials.
 - Displays day of week, date, month, and 12-hour time.
-- Hourly chime and settable alarm via a piezo beeper.
+- Hourly chime and settable alarm via a piezo beeper, with per-day scheduling (e.g. weekdays only) and a "next alarm" readout on the dashboard.
 - Sleep mode that suppresses the display and hourly chime, toggled with a touch pad.
 - OTA (over-the-air) firmware updates via the web interface.
+
+> [!CAUTION]
+> This is a hobby project with no guarantees of reliability. Wi-Fi drops, NTP failures, power outages, and plain old bugs can all cause the alarm to not go off. Don't rely on it for anything you can't afford to be late for — the author is not responsible if it fails and you oversleep.
 
 ## Hardware Required
 
@@ -58,9 +61,9 @@ src/
   Clocky.cpp        Entry point (setup/loop)
   wifi_manager.*     Wi-Fi connection state machine / AP fallback
   time_manager.*      NTP sync and time zone handling
-  ui.h / gui.cpp        ESPUI web interface
-  callback.cpp           ESPUI control callbacks
-  debug.cpp                Heap/debug telemetry
+  web_server.*          AsyncWebServer instance, routes, and JSON REST API
+  web_assets.*            Embedded HTML/CSS/JS for the web dashboard
+  debug.cpp                  Debug log telemetry
 ```
 
 ## Notes

@@ -3,7 +3,10 @@
 
 #include <Arduino.h>
 
-// Wi-Fi State Machine states
+// Wi-Fi State Machine states. See handleWiFi() in wifi_manager.cpp for the
+// transitions between them: DISCONNECTED -> CONNECTING -> CONNECTED is the
+// happy path; repeated CONNECTING timeouts fall back to AP_MODE instead of
+// retrying forever.
 enum WifiState {
   WIFI_STATE_DISCONNECTED,
   WIFI_STATE_CONNECTING,

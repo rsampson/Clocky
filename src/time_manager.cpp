@@ -1,13 +1,18 @@
 #include "time_manager.h"
-#include "ui.h"
 #include <WiFiUdp.h>
-#include <ESPUI.h>
 
 // --- UDP and NTP Client instances ---
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
 
 // --- Timezone Rules and Definitions ---
+//
+// Each TimeChangeRule is { abbreviation, week-of-month, day-of-week, month,
+// hour, offset-from-UTC-in-minutes } describing when a zone's clock changes
+// (e.g. "2nd Sunday in March at 2am, then UTC-4"). A Timezone with two rules
+// observes DST (one rule for standard time, one for daylight time, applied
+// automatically based on the current date); a Timezone with one rule doesn't
+// observe DST at all — see the Timezone library's docs for the full API.
 
 // Australia Eastern Time Zone (Sydney, Melbourne)
 TimeChangeRule aEDT = {"AEDT", First, Sun, Oct, 2, 660}; // UTC + 11 hours
@@ -55,7 +60,7 @@ TimeChangeRule usPDT = {"PDT", Second, Sun, Mar, 2, -420};
 TimeChangeRule usPST = {"PST", First, Sun, Nov, 2, -480};
 Timezone usPT(usPDT, usPST);
 
-Timezone *tz = &UTC;
+Timezone *tz = &UTC;  // the user's currently selected zone; changed via TZstringToPointer()
 
 // --- Global Days array ---
 String Days[] = {"Undefined", "Sunday", "Monday", "Tuesday",
@@ -63,13 +68,26 @@ String Days[] = {"Undefined", "Sunday", "Monday", "Tuesday",
 
 // --- Helper functions ---
 
-// Return time zone and DST adjusted time from server
+// This is TimeLib's sync-provider callback (wired up via setSyncProvider() in
+// Clocky.cpp's setup()): TimeLib calls this whenever it decides it needs a
+// fresh time, and adopts whatever time_t comes back (unless it's 0, meaning
+// "no time available yet"). timeClient.getEpochTime() returns UTC seconds
+// since 1970 from the last successful NTP fetch (0 if there's never been
+// one); toLocal() applies the selected Timezone's offset/DST rule on top.
 time_t getNtpTime(void) {
   time_t serv_time = tz->toLocal(timeClient.getEpochTime());
   return (serv_time);
 }
 
-void printTZ(Timezone *tzone) {
+// tzName()/tzCode()/TZstringToPointer() are three views of the same mapping
+// between a Timezone object and how it's shown/stored in the web UI: tzName()
+// gives the human-readable label (e.g. "Eastern Standard Time") for the
+// status card, tzCode() gives the short code (e.g. "EST") used as the
+// dropdown's <option value>, and TZstringToPointer() (below) does the
+// reverse, turning a saved/submitted code back into the Timezone* to use.
+// Comparing by pointer (== &usET) works because each Timezone is a single
+// global instance — there's exactly one usET in the whole program.
+String tzName(Timezone *tzone) {
   String TZS;
 
   if (tzone == &ausET)
@@ -95,11 +113,39 @@ void printTZ(Timezone *tzone) {
   else
     TZS = "Unknown TZ";
 
-  TZS = TZS + " Time";
-  Serial.println(TZS);
-  ESPUI.updateControlValue(ui.timeZoneLabel, TZS);
+  return TZS + " Time";
 }
 
+String tzCode(Timezone *tzone) {
+  if (tzone == &ausET)
+    return "AEST";
+  else if (tzone == &tzMSK)
+    return "MSK";
+  else if (tzone == &CE)
+    return "CE";
+  else if (tzone == &UK)
+    return "GMT";
+  else if (tzone == &usET)
+    return "EST";
+  else if (tzone == &usCT)
+    return "CST";
+  else if (tzone == &usMT)
+    return "MST";
+  else if (tzone == &usAZ)
+    return "AZT";
+  else if (tzone == &usPT)
+    return "PST";
+  else
+    return "UTC";
+}
+
+void printTZ(Timezone *tzone) {
+  Serial.println(tzName(tzone));
+}
+
+// Called when a saved/user-submitted time zone code (matching the values in
+// web_assets.cpp's <select id="timezone"> options) needs to become the actual
+// Timezone* used for conversions. Falls back to UTC for anything unrecognized.
 Timezone *TZstringToPointer(String tzstring) {
   if (tzstring == "AEST")
     return (&ausET);
@@ -125,12 +171,4 @@ Timezone *TZstringToPointer(String tzstring) {
     Serial.println("Bad TZ selection");
     return (&UTC);
   }
-}
-
-void displayTime(void) {
-  char buf1[20];
-  time_t t = now();
-  sprintf(buf1, "%02d:%02d:%02d %02d/%02d", hour(t), minute(t), second(t),
-          month(t), day(t));
-  ESPUI.updateLabel(ui.timeLabel, buf1);
 }

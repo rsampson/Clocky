@@ -1,11 +1,8 @@
 /**
- * GUI adapted from the brilliant ESPUI written by: Lukas Bachschwell
- * and a demo by Ian Gray @iangray1000
- *
  * When this program boots, it will load an SSID and password from nvmem.
  * If these credentials do not work for some reason, the ESP will create an Access
  * Point wifi with the SSID HOSTNAME (defined in config.h). You can then connect and use
- * the controls on the "Wifi Credentials" tab to store credentials into the nvmem.
+ * the web dashboard's Setup tab to store credentials into the nvmem.
  *
  */
 // Tested on ESP32 Wemos Lolin32  and ESP12-F (esp8266), make sure these match your board,
@@ -24,9 +21,11 @@
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);   // SDA connects to D2, SCL  to D1 on the Wemos mini esp8266
 
-bool buttonState;  // the current reading from the input pin
+bool buttonState;  // debounced touch-pad state: LOW = desk-clock mode, HIGH = sleep mode
 //bool lastButtonState = LOW;  // the previous reading from the input pin
-unsigned int buttonPressCounter;  // how many times the button has been pressed
+// Counts touches since boot. Only its parity (even/odd) matters: even = desk-clock
+// mode, odd = sleep mode. See updateOledDisplay()'s `buttonPressCounter % 2` switch.
+unsigned int buttonPressCounter;
 
 #if defined(ESP32)
 #include <WiFi.h>
@@ -40,11 +39,10 @@ unsigned int buttonPressCounter;  // how many times the button has been pressed
 #ifndef CORE_MOCK
 #ifndef MMU_IRAM_HEAP
 #warning Try MMU option '2nd heap shared' in 'tools' IDE menu (cf. https://arduino-esp8266.readthedocs.io/en/latest/mmu.html#option-summary)
-#warning use decorators: { HeapSelectIram doAllocationsInIRAM; ESPUI.addControl(...) ... } (cf. https://arduino-esp8266.readthedocs.io/en/latest/mmu.html#how-to-select-heap)
 #warning then check http://<ip>/heap
 #endif  // MMU_IRAM_HEAP
 #ifndef DEBUG_ESP_OOM
-#error on ESP8266 and ESPUI, you must define OOM debug option when developping
+#error on ESP8266 with AsyncWebServer, you must define OOM debug option when developping
 #endif
 #endif
 #endif
@@ -59,33 +57,32 @@ unsigned int buttonPressCounter;  // how many times the button has been pressed
 Preferences preferences;
 
 #include <TimeLib.h>
-#include <ElegantOTA.h>  // version 3.1.6 https://github.com/s00500/ESPUI
+#include <ElegantOTA.h>  // version 3.1.6 https://github.com/ayushsharma82/ElegantOTA
 
 #include <CircularBuffer.hpp>         // version 1.4.0 https://github.com/rlogiacco/CircularBuffer
-CircularBuffer<float, 24> dayBuffer;  // store 24 hour temp samples
+// Leftover from a temperature-averaging feature this project doesn't have
+// (Clocky has no temp sensor) — declared and cleared but never filled/read.
+// Kept only because CLAUDE.md/other tooling may reference it; safe to delete.
+CircularBuffer<float, 24> dayBuffer;
 
-#include <ESPUI.h>  // version 2.2.4  uses EsoAsyncWebServer 3.6.0, AsynchTCP version 3.35 WebSockets 2.6.1 and Arduinojson 6.21.5
-
-#include "ui.h"
-UI ui;
-
+#include "web_server.h"
 #include "clocky.h"
 
 //Function Prototypes
-void paramCallback(Control *sender, int type, int param);
 void runAlarm(void);
 bool readTouch(void);
 
-//ESPUI=================================================================================================================
-
+// String forms of runHour/runMinute, kept around so they can be handed straight
+// to Preferences.putString()/getString() without re-formatting each time.
 String stored_hour, stored_minute;
 
 // Input values
 uint16_t runHour = 2;     // hour to start running
 uint16_t runMinute = 10;  // minute to start running
 
-bool disable;
-char charBuf[bufferSize];
+bool disable;                // true = settable alarm is muted (hourly chime is unaffected)
+uint8_t activeDays = 0x7F;   // which weekdays the alarm fires on; see clocky.h for the bit layout
+char charBuf[bufferSize];    // holds the drained debug log text; see debug.cpp
 String bootTime;
 
 void setup() {
@@ -97,32 +94,45 @@ void setup() {
   pinMode(SensorPin, INPUT);
   pinMode(ledPin, OUTPUT);
 
-  tone(BUZZER_PIN, highTone, 1000);
+  tone(BUZZER_PIN, highTone, 1000);  // audible boot beep
 
+  // Preferences is the NVS-backed key/value store (not EEPROM.h) used for every
+  // setting the web UI can change: Wi-Fi credentials, time zone, alarm schedule.
   if (!preferences.begin("Settings")) {
     Serial.println(F("Failed to open preferences."));
     ESP.restart();
   }
 
   tz = TZstringToPointer(preferences.getString("tz", "UTC"));
+  printTZ(tz);
 
   // Kick off the non-blocking WiFi state machine; handleWiFi() in loop()
   // drives the connection (including the very first attempt) from here.
   currentWifiState = WIFI_STATE_DISCONNECTED;
 
-  timeClient.begin();  // set up ntp time client and then initialize time library
+  // NTPClient just opens a local UDP socket here; it hasn't talked to a time
+  // server yet (WiFi isn't connected at this point in setup()). setSyncProvider
+  // tells TimeLib to call getNtpTime() whenever it needs a fresh time, and
+  // getNtpTime() reads whatever NTPClient last fetched (or 0 if nothing yet).
+  // The very first call below will get 0, so TimeLib just marks itself
+  // "needs sync" rather than adopting a bogus time. See the initialTimeSynced
+  // block in loop() for how we force a real resync once WiFi actually connects.
+  timeClient.begin();
   setSyncProvider(getNtpTime);
-  setSyncInterval(300);  // sync time server every 5 minutes
+  setSyncInterval(300);  // re-run getNtpTime() at most every 5 minutes
 
   dayBuffer.clear();
 
-  Serial.println(F("configuring Gui"));
-  setUpUI();
-
+  // Load saved alarm settings; defaults here match a fresh/never-configured device.
+  runHour = (stored_hour = preferences.getString("hour", "8")).toInt();
+  runMinute = (stored_minute = preferences.getString("minute", "0")).toInt();
   disable = preferences.getBool("disable", "0");
-  ESPUI.updateSwitcher(ui.mainSwitcher, disable);
+  activeDays = preferences.getUChar("activeDays", 0x7F);  // 0x7F = every day
 
-  ElegantOTA.begin(ESPUI.WebServer());
+  Serial.println(F("configuring web server"));
+  setUpWebServer();  // starts the AsyncWebServer; see web_server.cpp for routes
+
+  ElegantOTA.begin(&server);  // adds the /update page to the same web server
   // boot up message
   webPrint("%s up at: %s on %s\n", HOSTNAME, timeClient.getFormattedTime(), dayStr(weekday()));
   // getBootReasonMessage(bootReasonMessage, BOOT_REASON_MESSAGE_SIZE);
@@ -142,14 +152,18 @@ void setup() {
   display.setCursor(0,28);               // Start at top-left corner
   display.println("booting");
   display.display();
-  while(readTouch() == false){;}        // wait for touch to start telling time
+  // Note: setup() does NOT wait for a touch or for WiFi/NTP here — loop() starts
+  // immediately so the clock can sync as soon as possible after a power cycle.
 
   Serial.println(F("We Are Go!"));
 }
 
-unsigned int deltaTime;
+unsigned int deltaTime;  // last measured touch-pad RC rise time, in microseconds (see readTouch())
 
-void updateOledDisplay(void) {  // display mode set by push button
+// Called twice a second from loop(). Which of the two display modes is shown
+// depends only on whether buttonPressCounter (bumped once per touch) is even
+// or odd — there's no separate "mode" variable.
+void updateOledDisplay(void) {
 
   char buf[20];
 
@@ -158,7 +172,7 @@ void updateOledDisplay(void) {  // display mode set by push button
   //display.setTextColor(SSD1306_WHITE);
   //display.invertDisplay(true);
   int hr = hour() % 12;
-  if (hr == 0) hr = 12;
+  if (hr == 0) hr = 12;  // convert 24h hour() to 12h display, with 0 shown as 12
 
   switch (buttonPressCounter % 2) {
     // case 0:                       // initial state
@@ -166,11 +180,14 @@ void updateOledDisplay(void) {  // display mode set by push button
     //   noTone(BUZZER_PIN);         // kill alarm
     //   sprintf(buf, " ");
     //   break;
-    case 0:                        // clock display state
+    case 0:                        // desk-clock mode (even touch count, including 0 = default at boot)
       digitalWrite(ledPin, LOW);  // turn on the night lite
       display.stopscroll();
+      // Cycle what's shown based on the current second, so day-of-week and
+      // date each get one 1-second slot per 5 seconds, while the time itself
+      // (the thing you actually glance at) gets 3 of the 5 slots.
       switch (second() % 5) {
-        case 0:
+        case 0:  // day of week, e.g. "Mon"
           display.setFont(&FreeSans18pt7b);
           display.setCursor(0, 28);
           sprintf(buf, "   %s", dayShortStr(weekday()));
@@ -183,14 +200,14 @@ void updateOledDisplay(void) {  // display mode set by push button
           sprintf(buf, "%2d:%02d", hr, minute());
           //sprintf(buf, "%3d", deltaTime);  // hack to debug touch switch
           break;
-        case 4:
+        case 4:  // month + day, e.g. "Aug 22"
           display.setFont(&FreeSans12pt7b);
           display.setCursor(12, 25);
           sprintf(buf, " %s %2d", monthShortStr(month()), day());
           break;
       }
       break;
-    case 1:  // sleep state
+    case 1:  // sleep mode (odd touch count): screen mostly dark, hourly chime muted
       digitalWrite(ledPin, HIGH) ;  // turn off the night lite
       noTone(BUZZER_PIN);         // kill alarm
       display.clearDisplay();
@@ -199,13 +216,17 @@ void updateOledDisplay(void) {  // display mode set by push button
       display.setFont(&FreeSans12pt7b);
       display.setCursor(3, 16);
       sprintf(buf, "      .");
-      display.startscrollright(0x00, 0x0F);
+      display.startscrollright(0x00, 0x0F);  // small scrolling dot as an "I'm still alive" indicator
       break;
   }
   display.print(buf);
   display.display();
 }
 
+// Called every loop() iteration. Handles two independent things: the hourly
+// chime (always active unless in sleep mode) and the settable alarm (gated by
+// disable/activeDays). Both compare against the same `now()` snapshot so they
+// can't disagree about what time it currently is mid-function.
 void runAlarm() {
 
   time_t t = now();  // Store the current time atomically
@@ -213,7 +234,10 @@ void runAlarm() {
   int hr = hour(t) % 12;
   if (hr == 0) hr = 12;
 
-  // process hourly chime if not in quiet mode
+  // Hourly chime: rings once per hour of the 12-hour clock (e.g. 7 chimes at
+  // 7:00), muted only by sleep mode — NOT by the `disable`/alarm settings below.
+  // This whole block is blocking (delay() calls totalling ~1s per chime), so at
+  // 12 o'clock it can tie up loop() for several seconds.
   if (minute(t) == 0 && second(t) == 0 && (buttonPressCounter % 2) != 1) {
     for (int i = 0; i < hr; i++) {
       tone(BUZZER_PIN, highTone, 150);  // c#7
@@ -222,13 +246,18 @@ void runAlarm() {
       delay(700);
       noTone(BUZZER_PIN);
     }
-    delay(400);  // prevent reentrance
+    delay(400);  // prevent reentrance: keeps this from re-triggering within the same second
   }
 
   if (disable) {  // bail out if alarm is disabled
     return;
   }
-  // process alarm
+  // weekday(t) is 1=Sunday..7=Saturday; activeDays bit 0=Sunday..bit 6=Saturday.
+  if (!(activeDays & (1 << (weekday(t) - 1)))) {  // bail out if today isn't an alarm day
+    return;
+  }
+  // process alarm: fires for exactly one second (the second() == 0 instant) at
+  // the configured hour/minute, once per day it's active.
   if (hour(t) == runHour && minute(t) == runMinute && second(t) == 0) {
     webPrint("Alarm run at: %d hour and %d minutes\n", runHour, runMinute);
     tone(BUZZER_PIN, highTone);
@@ -237,17 +266,29 @@ void runAlarm() {
 
 
 
-bool readTouch(void) {  // read the state of the touch pad switch
-  digitalWrite(DriverPin, LOW); // Initialize sensor pin to ground level
-  pinMode(SensorPin, OUTPUT) ;
+// There's no capacitive-touch library or dedicated hardware here — this is a
+// homemade RC-delay trick. DriverPin feeds the touch pad through a 300k
+// resistor, and SensorPin reads the pad directly. A finger touching the pad
+// adds body capacitance, which slows how fast the pad's voltage rises when
+// DriverPin switches from low to high. So: pull everything low, then drive
+// high and time (in a tight busy-wait loop, using micros()) how long SensorPin
+// takes to read HIGH. A slow rise (>= treshold, from config.h) means touched.
+bool readTouch(void) {
+  // Discharge the pad fully before timing, so every measurement starts from
+  // the same known (low) voltage.
+  digitalWrite(DriverPin, LOW);
+  pinMode(SensorPin, OUTPUT);
   digitalWrite(SensorPin, LOW);
   delay(10);
-  digitalWrite(DriverPin, HIGH); // now drive the sensor pin high
+
+  // Now drive the pad high through the resistor and time how long SensorPin
+  // takes to follow.
+  digitalWrite(DriverPin, HIGH);
   pinMode(SensorPin, INPUT);
   unsigned int bailOutCounter = 0;
   unsigned int timerVal = micros();
   while (digitalRead(SensorPin) != HIGH && bailOutCounter < 1000) { bailOutCounter++; }  // time how long it takes for the input to follow the output
-  if (bailOutCounter == 1000) return (true);
+  if (bailOutCounter == 1000) return (true);  // pin never went high — treat as touched (fail-safe, not fail-silent)
   deltaTime = micros() - timerVal;
   //Serial.println(deltaTime);       // debug
   return (deltaTime >= treshold);   // If it takes longer than the treshold time to go high, declair that the pad is touched
@@ -261,7 +302,7 @@ void loop() {
   handleWiFi();         // non-blocking wifi connect/reconnect state machine
   timeClient.update();  // run ntp time client
   runAlarm();           // activate alarm if correct time
-  ElegantOTA.loop();
+  ElegantOTA.loop();    // services any in-progress /update firmware upload
 
   // setup() calls setSyncProvider() before WiFi exists, so that first sync
   // fails and TimeLib won't retry on its own for a full syncInterval. Force
@@ -271,40 +312,33 @@ void loop() {
     setTime(getNtpTime());
   }
 
+  // Touch-pad debouncing: readTouch() is a noisy analog-ish measurement, so
+  // instead of trusting one reading, sample it 10 times (100ms total) and go
+  // with whichever result was seen more than half the time (majority vote).
   uint16_t trueSum = 0;
-  for (int i = 0; i < 10; i++) {  // read pad 10 times and vote on it's state for debouncing
+  for (int i = 0; i < 10; i++) {
     if (readTouch() == true) trueSum++;
     delay(10);
   }
   bool reading = (trueSum > 6 ? HIGH : LOW);
 
-  // if the button state has changed:
+  // Edge-triggered: only act when the debounced state actually changes, and
+  // only count/beep on the LOW->HIGH transition (the moment of touching),
+  // not on release.
   if (reading != buttonState) {
     buttonState = reading;
-    // only advance counter if the new button state is HIGH
     if (buttonState == HIGH) {
-      buttonPressCounter++;
-      tone(BUZZER_PIN, 2020, 30);
+      buttonPressCounter++;  // parity of this drives desk-clock vs sleep mode; see updateOledDisplay()
+      tone(BUZZER_PIN, 2020, 30);  // short beep to confirm the touch registered
       delay(30);
       webPrint("Button press count: %02d\n", buttonPressCounter);
     }
   }
   // end button processing
 
-  if (millis() > previousTime + 500) {  // update gui twice per second
+  if (millis() > previousTime + 500) {  // update display twice per second
     previousTime = millis();
-
-    fetchDebugText();
-    ESPUI.updateLabel(ui.debugLabel, String(charBuf));
-    ESPUI.updateLabel(ui.signalLabel, String(WiFi.RSSI()) + " dbm");
-
-    // determine if we are running stand alone to find the source of time (browser vs ntp server)
-    if (ap_mode == false) {
-      displayTime();      // update the web UI time/date label
-      updateOledDisplay();  // update the physical OLED display
-    } else {
-      ESPUI.updateTime(ui.mainTime);  // get time from browser, we are not connect to the NTP server
-    }
+    updateOledDisplay();  // update the physical OLED display
   }
 #if !defined(ESP32)
   //We don't need to call this explicitly on ESP32 but we do on 8266

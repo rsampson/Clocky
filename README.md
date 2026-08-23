@@ -2,6 +2,8 @@
 
 A simple desk clock for the ESP8266 / ESP32 with a web interface for configuration.
 
+<img src="src/images/hardware-photo.jpg" alt="Clocky hardware in its enclosure, showing the OLED time display, touch pad, and status LED" width="360">
+
 ## Features
 
 - Synchronizes time over NTP and automatically corrects for daylight saving time.
@@ -51,6 +53,12 @@ pio device monitor            # serial monitor (115200 baud)
 3. Enter your Wi-Fi router's SSID and password to join the clock to your LAN.
 4. Once connected, the clock is reachable at `clocky.local` (mDNS) or the IP assigned by your router.
 5. Use the web interface to set the time zone, configure the alarm, and perform OTA firmware updates (no serial connection needed after this point).
+
+### Web Dashboard
+
+| Status | Alarm | Setup |
+|---|---|---|
+| ![Status tab showing current time, WiFi signal, next alarm, and a debug log](src/images/dashboard-status.png) | ![Alarm tab showing the alarm on/off switch, alarm time, and day-of-week selection](src/images/dashboard-alarm.png) | ![Setup tab showing WiFi credentials, time zone selection, and maintenance actions](src/images/dashboard-setup.png) |
 
 ## Project Structure
 

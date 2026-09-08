@@ -10,7 +10,7 @@ A simple desk clock for the ESP8266 / ESP32 with a web interface for configurati
 - Web interface for setting the time zone, alarm, and Wi-Fi credentials.
 - Displays day of week, date, month, and 12-hour time.
 - Hourly chime and settable alarm via a piezo beeper, with per-day scheduling (e.g. weekdays only) and a "next alarm" readout on the dashboard.
-- Sleep mode that suppresses the display and hourly chime, toggled with a touch pad.
+- Sleep mode that suppresses the display light and the hourly chime, toggled with a touch pad. The settable alarm still sounds in sleep mode (that's the point of an alarm) and is silenced with a touch.
 - OTA (over-the-air) firmware updates via the web interface.
 
 > [!CAUTION]

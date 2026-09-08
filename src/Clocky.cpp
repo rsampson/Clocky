@@ -126,15 +126,16 @@ void setup() {
   // Load saved alarm settings; defaults here match a fresh/never-configured device.
   runHour = (stored_hour = preferences.getString("hour", "8")).toInt();
   runMinute = (stored_minute = preferences.getString("minute", "0")).toInt();
-  disable = preferences.getBool("disable", "0");
+  disable = preferences.getBool("disable", false);  // missing key => alarm enabled
   activeDays = preferences.getUChar("activeDays", 0x7F);  // 0x7F = every day
 
   Serial.println(F("configuring web server"));
   setUpWebServer();  // starts the AsyncWebServer; see web_server.cpp for routes
 
   ElegantOTA.begin(&server);  // adds the /update page to the same web server
-  // boot up message
-  webPrint("%s up at: %s on %s\n", HOSTNAME, timeClient.getFormattedTime(), dayStr(weekday()));
+  // (No "up at ..." boot message here — the clock hasn't synced yet, so it would
+  // just log 00:00:00. The "WiFi up: <ip>" line from wifi_manager.cpp marks the
+  // boot in the web log instead.)
   // getBootReasonMessage(bootReasonMessage, BOOT_REASON_MESSAGE_SIZE);
   // webPrint("Reset reason: %s\n", bootReasonMessage);
 
@@ -148,8 +149,8 @@ void setup() {
 
   display.setTextSize(1);               // Normal 1:1 pixel scale
   display.setTextColor(SSD1306_WHITE);  // Draw white text
-  display.setFont(&FreeSans18pt7b);
-  display.setCursor(0,28);               // Start at top-left corner
+  display.setFont(&FreeSans12pt7b);
+  display.setCursor(0,20);               // Start at top-left corner
   display.println("booting");
   display.display();
   // Note: setup() does NOT wait for a touch or for WiFi/NTP here — loop() starts
@@ -168,6 +169,20 @@ void updateOledDisplay(void) {
   char buf[20];
 
   display.clearDisplay();
+
+  // AP-mode provisioning screen: when WiFi credentials haven't worked and
+  // Clocky has fallen back to being its own access point, the clock is
+  // meaningless (no NTP sync) — instead show the SoftAP IP the user needs to
+  // type into a browser to reach the Setup tab. The AP address is the fixed
+  // 192.168.4.1 configured in wifi_manager.cpp's setUpAP().
+  if (currentWifiState == WIFI_STATE_AP_MODE) {
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(0, 40);
+    display.print(WiFi.softAPIP().toString());
+    display.display();
+    return;
+  }
+
   sprintf(buf, " ");
   //display.setTextColor(SSD1306_WHITE);
   //display.invertDisplay(true);
@@ -207,9 +222,13 @@ void updateOledDisplay(void) {
           break;
       }
       break;
-    case 1:  // sleep mode (odd touch count): screen mostly dark, hourly chime muted
+    case 1:  // sleep mode (odd touch count): screen mostly dark
       digitalWrite(ledPin, HIGH) ;  // turn off the night lite
-      noTone(BUZZER_PIN);         // kill alarm
+      // NOTE: deliberately no noTone() here. Sleep mode only suppresses the
+      // display light; the settable alarm must keep sounding to wake the user
+      // (it's silenced by a touch, which flips back to desk-clock mode). The
+      // hourly chime is already prevented from ringing in sleep mode by the
+      // (buttonPressCounter % 2) != 1 guard in runAlarm().
       display.clearDisplay();
       //display.setTextColor(SSD1306_WHITE);
       //display.invertDisplay(false);
@@ -256,9 +275,14 @@ void runAlarm() {
   if (!(activeDays & (1 << (weekday(t) - 1)))) {  // bail out if today isn't an alarm day
     return;
   }
-  // process alarm: fires for exactly one second (the second() == 0 instant) at
-  // the configured hour/minute, once per day it's active.
-  if (hour(t) == runHour && minute(t) == runMinute && second(t) == 0) {
+  // process alarm: fires once when the clock reaches the configured hour/minute.
+  // runAlarm() runs every loop() iteration, so second() == 0 stays true for many
+  // iterations — latch on the triggering minute so we only log/beep once, not
+  // once per loop through that whole second.
+  static int lastFiredMinuteOfDay = -1;
+  int minuteOfDay = hour(t) * 60 + minute(t);
+  if (minuteOfDay == runHour * 60 + runMinute && minuteOfDay != lastFiredMinuteOfDay) {
+    lastFiredMinuteOfDay = minuteOfDay;
     webPrint("Alarm run at: %d hour and %d minutes\n", runHour, runMinute);
     tone(BUZZER_PIN, highTone);
   }
@@ -300,9 +324,21 @@ bool initialTimeSynced = false;
 void loop() {
 
   handleWiFi();         // non-blocking wifi connect/reconnect state machine
-  timeClient.update();  // run ntp time client
+  // Only poll NTP when actually connected: NTPClient::update() blocks ~1s on a
+  // UDP receive timeout when there's no link, which would stall loop() (touch
+  // sampling, the alarm check) for the whole duration of a WiFi outage.
+  // TimeLib's now() keeps free-running off millis() in the meantime.
+  if (WiFi.status() == WL_CONNECTED) {
+    timeClient.update();  // run ntp time client
+  }
   runAlarm();           // activate alarm if correct time
   ElegantOTA.loop();    // services any in-progress /update firmware upload
+
+  // Deferred reboot: /api/reboot sets rebootAt instead of calling ESP.restart()
+  // inline, so the HTTP response has time to flush to the browser first.
+  if (rebootAt != 0 && millis() >= rebootAt) {
+    ESP.restart();
+  }
 
   // setup() calls setSyncProvider() before WiFi exists, so that first sync
   // fails and TimeLib won't retry on its own for a full syncInterval. Force
@@ -329,6 +365,7 @@ void loop() {
     buttonState = reading;
     if (buttonState == HIGH) {
       buttonPressCounter++;  // parity of this drives desk-clock vs sleep mode; see updateOledDisplay()
+      noTone(BUZZER_PIN);          // a touch silences an in-progress alarm
       tone(BUZZER_PIN, 2020, 30);  // short beep to confirm the touch registered
       delay(30);
       webPrint("Button press count: %02d\n", buttonPressCounter);

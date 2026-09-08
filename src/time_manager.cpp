@@ -60,6 +60,30 @@ TimeChangeRule usPDT = {"PDT", Second, Sun, Mar, 2, -420};
 TimeChangeRule usPST = {"PST", First, Sun, Nov, 2, -480};
 Timezone usPT(usPDT, usPST);
 
+// India Standard Time (Kolkata, Mumbai, Delhi) - no DST, UTC + 5:30
+TimeChangeRule istRule = {"IST", Last, Sun, Mar, 1, 330};
+Timezone tzIST(istRule);
+
+// Japan Standard Time (Tokyo) - no DST, UTC + 9
+TimeChangeRule jstRule = {"JST", Last, Sun, Mar, 1, 540};
+Timezone tzJST(jstRule);
+
+// China Standard Time (Beijing, Shanghai) - no DST, UTC + 8
+TimeChangeRule cnstRule = {"CNST", Last, Sun, Mar, 1, 480};
+Timezone tzCN(cnstRule);
+
+// Gulf Standard Time (Dubai, Abu Dhabi) - no DST, UTC + 4
+TimeChangeRule gstRule = {"GST", Last, Sun, Mar, 1, 240};
+Timezone tzGST(gstRule);
+
+// South Africa Standard Time (Johannesburg) - no DST, UTC + 2
+TimeChangeRule sastRule = {"SAST", Last, Sun, Mar, 1, 120};
+Timezone tzSAST(sastRule);
+
+// Brazil (Sao Paulo) - no DST since 2019, UTC - 3
+TimeChangeRule brtRule = {"BRT", Last, Sun, Mar, 1, -180};
+Timezone tzBRT(brtRule);
+
 Timezone *tz = &UTC;  // the user's currently selected zone; changed via TZstringToPointer()
 
 // --- Global Days array ---
@@ -110,6 +134,18 @@ String tzName(Timezone *tzone) {
     TZS = "Arizona";
   else if (tzone == &usPT)
     TZS = "Pacific Standard";
+  else if (tzone == &tzIST)
+    TZS = "India Standard";
+  else if (tzone == &tzJST)
+    TZS = "Japan Standard";
+  else if (tzone == &tzCN)
+    TZS = "China Standard";
+  else if (tzone == &tzGST)
+    TZS = "Gulf Standard";
+  else if (tzone == &tzSAST)
+    TZS = "South Africa Standard";
+  else if (tzone == &tzBRT)
+    TZS = "Brasilia";
   else
     TZS = "Unknown TZ";
 
@@ -135,6 +171,18 @@ String tzCode(Timezone *tzone) {
     return "AZT";
   else if (tzone == &usPT)
     return "PST";
+  else if (tzone == &tzIST)
+    return "IST";
+  else if (tzone == &tzJST)
+    return "JST";
+  else if (tzone == &tzCN)
+    return "CNST";
+  else if (tzone == &tzGST)
+    return "GST";
+  else if (tzone == &tzSAST)
+    return "SAST";
+  else if (tzone == &tzBRT)
+    return "BRT";
   else
     return "UTC";
 }
@@ -167,6 +215,18 @@ Timezone *TZstringToPointer(String tzstring) {
     return (&usAZ);
   else if (tzstring == "PST")
     return (&usPT);
+  else if (tzstring == "IST")
+    return (&tzIST);
+  else if (tzstring == "JST")
+    return (&tzJST);
+  else if (tzstring == "CNST")
+    return (&tzCN);
+  else if (tzstring == "GST")
+    return (&tzGST);
+  else if (tzstring == "SAST")
+    return (&tzSAST);
+  else if (tzstring == "BRT")
+    return (&tzBRT);
   else {
     Serial.println("Bad TZ selection");
     return (&UTC);

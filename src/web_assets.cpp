@@ -107,6 +107,12 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
           <option value="MST">US Mountain</option>
           <option value="AZT">Arizona</option>
           <option value="PST">US Pacific</option>
+          <option value="BRT">Brazil (S&atilde;o Paulo)</option>
+          <option value="SAST">South Africa</option>
+          <option value="GST">Gulf (Dubai)</option>
+          <option value="IST">India</option>
+          <option value="CNST">China</option>
+          <option value="JST">Japan</option>
         </select>
       </div>
     </div>

@@ -25,6 +25,22 @@ const unsigned long WIFI_CHECK_INTERVAL =
 
 char IP[] = "xxx.xxx.xxx.xxx"; // IP address string
 
+// Track link up/down transitions so the Status-page log can show how long the
+// link had been up when it dropped, and how long it was down when it recovered.
+static unsigned long wifiConnectedSince = 0; // millis() when link last came up
+static unsigned long wifiDownSince = 0;      // millis() when link last dropped
+
+// Render a millis() delta compactly for a log line: "45s", "6m", "3h12m".
+static String humanDur(unsigned long ms) {
+  unsigned long s = ms / 1000;
+  if (s < 60)
+    return String(s) + "s";
+  unsigned long m = s / 60;
+  if (m < 60)
+    return String(m) + "m";
+  return String(m / 60) + "h" + String(m % 60) + "m";
+}
+
 String stored_ssid;
 String stored_pass;
 bool ap_mode = true;
@@ -104,7 +120,12 @@ void handleWiFi() {
 
       IPAddress ip = WiFi.localIP();
       ip.toString().toCharArray(IP, 16);
-      webPrint("Wifi up, IP address = %s \n", IP);
+      if (wifiDownSince == 0)
+        webPrint("WiFi up: %s, %d dBm (initial)\n", IP, WiFi.RSSI());
+      else
+        webPrint("WiFi up: %s, %d dBm (down %s)\n", IP, WiFi.RSSI(),
+                 humanDur(currentMillis - wifiDownSince).c_str());
+      wifiConnectedSince = currentMillis;
 
       WiFi.setAutoReconnect(false); // we manage reconnects ourselves
       WiFi.persistent(true);
@@ -145,7 +166,9 @@ void handleWiFi() {
 
       if (WiFi.status() != WL_CONNECTED) {
         Serial.println("WiFi: Connection lost! Triggering reconnection...");
-        webPrint("WiFi: Connection lost! Triggering reconnection...\n");
+        webPrint("WiFi lost: %d dBm, up %s\n", WiFi.RSSI(),
+                 humanDur(currentMillis - wifiConnectedSince).c_str());
+        wifiDownSince = currentMillis;
 
         currentWifiState = WIFI_STATE_DISCONNECTED;
       }

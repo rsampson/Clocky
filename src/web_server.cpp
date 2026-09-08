@@ -15,6 +15,10 @@
 
 AsyncWebServer server(80);
 
+// See web_server.h. 0 = no reboot pending. Set by handleReboot(), consumed by
+// loop() in Clocky.cpp.
+volatile unsigned long rebootAt = 0;
+
 // Streams a JsonDocument out as the HTTP response body, instead of
 // serializing to a String first — avoids an extra full-size copy of the JSON.
 static void sendJson(AsyncWebServerRequest *request, JsonDocument &doc) {
@@ -127,12 +131,13 @@ static void handleSetTime(AsyncWebServerRequest *request, JsonVariant &json) {
   request->send(200, "text/plain", "ok");
 }
 
-// POST /api/reboot — Setup tab's Reboot button. Restarts immediately, with no
-// delay; the HTTP response may or may not make it back to the browser before
-// the device actually resets.
+// POST /api/reboot — Setup tab's Reboot button. Doesn't restart inline (that
+// would cut the TCP connection before the response flushed and the dashboard's
+// fetch() would reject); instead it arms a ~500ms deferred reboot that loop()
+// in Clocky.cpp carries out once the response has gone out.
 static void handleReboot(AsyncWebServerRequest *request) {
   request->send(200, "text/plain", "rebooting");
-  ESP.restart();
+  rebootAt = millis() + 500;
 }
 
 // Small helper so each POST route below doesn't have to repeat this cast.

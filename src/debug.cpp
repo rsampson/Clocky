@@ -39,10 +39,15 @@ void webPrint(const char* format, ...)
       // oldest byte, which could leave a partial line at the front. Instead
       // of showing a garbled half-line, drop everything up to and including
       // the next newline, so what's left always starts at a line boundary.
-      while(circBuff.first() != '\n') {
+      // The isEmpty() guards matter only in the pathological case of a full
+      // buffer containing no '\n' at all — without them first()/shift() would
+      // be called on an empty buffer.
+      while(!circBuff.isEmpty() && circBuff.first() != '\n') {
         circBuff.shift();
       }
-      circBuff.shift(); // get rid of \n
+      if(!circBuff.isEmpty()) {
+        circBuff.shift(); // get rid of \n
+      }
     }
   }
 }
@@ -51,15 +56,16 @@ void webPrint(const char* format, ...)
 // Copies the circular buffer's current contents into charBuf (see clocky.h)
 // as a plain null-terminated string, for handleStatus() in web_server.cpp to
 // send as the "log" field. Non-destructive: each byte is shift()ed off the
-// front and immediately push()ed back on, so the buffer's contents and order
-// are unchanged afterwards — this is a copy-out, not a drain.
+// front and immediately push()ed back, so the buffer is left unchanged. The
+// dashboard polls /api/status once per second, so draining here would leave
+// the web log showing only the last ~1 s of output.
 void fetchDebugText() {
   int qty = circBuff.size();
   int i = 0;
-  // unload ring buffer contents
+  // copy ring buffer contents, putting each byte straight back
   for (i = 0; i < qty; i++) {
     charBuf[i] = circBuff.shift();
     circBuff.push(charBuf[i]);
   }
-  charBuf[i+1] = 0; //terminate string
+  charBuf[i] = 0; //terminate string
 }

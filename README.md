@@ -58,7 +58,7 @@ pio device monitor            # serial monitor (115200 baud)
 
 | Status | Alarm | Setup |
 |---|---|---|
-| ![Status tab showing current time, WiFi signal, next alarm, and a debug log](src/images/dashboard-status.png) | ![Alarm tab showing the alarm on/off switch, alarm time, and day-of-week selection](src/images/dashboard-alarm.png) | ![Setup tab showing WiFi credentials, time zone selection, and maintenance actions](src/images/dashboard-setup.png) |
+| ![Status tab showing an analog clock face, next alarm, WiFi signal, and a debug log](src/images/status_page.png) | ![Alarm tab showing the alarm on/off switch, alarm time, and day-of-week selection](src/images/alarm_page.png) | ![Setup tab showing WiFi credentials, time zone selection, and maintenance actions](src/images/setup_page.png) |
 
 ## Project Structure
 

@@ -4,6 +4,11 @@
 // HTML/CSS/JS text baked into flash rather than a filesystem) and served
 // as-is by web_server.cpp's GET routes for "/", "/style.css", and "/app.js".
 // PROGMEM keeps these off the small amount of RAM available on the ESP8266.
+//
+// This is the "wall clock" dashboard: an analog sweep-second face is the
+// primary display, with device state and controls in a quiet right-hand
+// column. It talks to exactly the same /api/* routes as the original
+// dashboard — no firmware changes outside this file.
 
 const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 <html lang="en">
@@ -14,525 +19,526 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<div class="wrap">
+
 <header>
-  <h1>&#8987; Clocky</h1>
-  <span id="conn" class="pill offline">offline</span>
+  <nav>
+    <span class="brand">Clocky</span>
+    <a href="#" class="tab-btn on" data-tab="status">Status</a>
+    <a href="#" class="tab-btn" data-tab="alarm">Alarm</a>
+    <a href="#" class="tab-btn" data-tab="setup">Setup</a>
+  </nav>
+  <div class="conn"><span id="dot" class="dot off"></span><span id="conn" class="mono">connecting</span></div>
 </header>
 
-<nav class="tabs">
-  <button class="tab-btn active" data-tab="status">Status</button>
-  <button class="tab-btn" data-tab="alarm">Alarm</button>
-  <button class="tab-btn" data-tab="setup">Setup</button>
-</nav>
-
-<main>
-  <section id="tab-status" class="tab active">
-    <div class="grid">
-      <div class="card">
-        <div class="card-label">Time</div>
-        <div id="time" class="card-value">--:--:--</div>
-        <div id="tz" class="card-sub"></div>
-      </div>
-      <div class="card">
-        <div class="card-label">WiFi Signal</div>
-        <div id="rssi" class="card-value">-- dBm</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Next Alarm</div>
-        <div id="next-alarm" class="card-value small">--</div>
-      </div>
+<section id="tab-status" class="body on">
+  <div class="main">
+    <svg viewBox="0 0 200 200" class="face big-face">
+      <circle cx="100" cy="100" r="96" fill="#fff" stroke="#e1e5e2" stroke-width="1"></circle>
+      <path class="minor" stroke="#c3ccc8" stroke-width="1.5" stroke-linecap="round"></path>
+      <path class="major" stroke="#1a1f1c" stroke-width="3.2" stroke-linecap="round"></path>
+      <line id="hh" x1="100" y1="100" x2="100" y2="48" stroke="#1a1f1c" stroke-width="7" stroke-linecap="round"></line>
+      <line id="mh" x1="100" y1="100" x2="100" y2="24" stroke="#1a1f1c" stroke-width="4.2" stroke-linecap="round"></line>
+      <line id="sh" x1="100" y1="118" x2="100" y2="20" stroke="#c0392b" stroke-width="1.5" stroke-linecap="round"></line>
+      <circle cx="100" cy="100" r="5" fill="#1a1f1c"></circle>
+      <circle cx="100" cy="100" r="1.8" fill="#fff"></circle>
+    </svg>
+    <div class="ctr">
+      <div id="clockHM" class="huge">--:--</div>
+      <div class="sub"><span id="dateLong">&mdash;</span> &middot; <span id="tzName" class="nb"></span></div>
     </div>
-
-    <div class="card wide">
-      <div class="card-label">Log</div>
+  </div>
+  <aside>
+    <div>
+      <div class="lbl">Next alarm</div>
+      <div id="nextAlarm" class="val">&mdash;</div>
+      <div id="alarmDays" class="sub2"></div>
+    </div>
+    <div class="rule"></div>
+    <div class="rows">
+      <div class="row"><span class="k">Signal</span><span id="rssi" class="num">&mdash;</span></div>
+      <div class="row"><span class="k">Network</span><span id="ssid" class="mono">&mdash;</span></div>
+      <div class="row"><span class="k">Alarm</span><span id="alarmState">&mdash;</span></div>
+    </div>
+    <div class="rule"></div>
+    <div>
+      <div class="lblrow"><div class="lbl">Log</div><span class="mono live">live</span></div>
       <pre id="log"></pre>
     </div>
-  </section>
+  </aside>
+</section>
 
-  <section id="tab-alarm" class="tab">
-    <div class="card wide">
-      <div class="switch-row">
-        <div>
-          <div class="card-label">Alarm</div>
-          <div id="alarm-state" class="card-sub"></div>
-        </div>
-        <label class="switch">
-          <input type="checkbox" id="alarm-toggle">
-          <span class="slider"></span>
-        </label>
+<section id="tab-alarm" class="body">
+  <div class="main">
+    <svg viewBox="0 0 200 200" class="face set-face">
+      <circle cx="100" cy="100" r="96" fill="#fff" stroke="#e1e5e2" stroke-width="1"></circle>
+      <path class="minor" stroke="#e1e5e2" stroke-width="1.5" stroke-linecap="round"></path>
+      <path class="major" stroke="#c3ccc8" stroke-width="3.2" stroke-linecap="round"></path>
+      <line id="ghh" x1="100" y1="100" x2="100" y2="52" stroke="#dfe4e2" stroke-width="6" stroke-linecap="round"></line>
+      <line id="gmh" x1="100" y1="100" x2="100" y2="30" stroke="#dfe4e2" stroke-width="3.6" stroke-linecap="round"></line>
+      <line id="ahh" x1="100" y1="100" x2="100" y2="48" stroke="#2e5d7d" stroke-width="7" stroke-linecap="round"></line>
+      <line id="amh" x1="100" y1="100" x2="100" y2="24" stroke="#2e5d7d" stroke-width="4.2" stroke-linecap="round"></line>
+      <circle id="acap" cx="100" cy="100" r="5" fill="#2e5d7d"></circle>
+      <circle cx="100" cy="100" r="1.8" fill="#fff"></circle>
+    </svg>
+    <div class="steppers">
+      <div class="stepper">
+        <div class="lbl">Hour</div>
+        <div id="ahStr" class="digits">--</div>
+        <div class="pm"><button type="button" id="hDown">&minus;</button><button type="button" id="hUp">+</button></div>
+      </div>
+      <div class="colon">:</div>
+      <div class="stepper">
+        <div class="lbl">Minute</div>
+        <div id="amStr" class="digits">--</div>
+        <div class="pm"><button type="button" id="mDown">&minus;</button><button type="button" id="mUp">+</button></div>
       </div>
     </div>
-
-    <div class="card wide">
-      <div class="card-label">Alarm Time</div>
-      <div class="form-row">
-        <label for="run-hour">Hour</label>
-        <input type="number" id="run-hour" min="0" max="23">
-        <label for="run-minute">Minute</label>
-        <input type="number" id="run-minute" min="0" max="59">
+    <div id="alarmClause" class="sub"></div>
+  </div>
+  <aside>
+    <div class="switch-row">
+      <div>
+        <div class="lbl">Alarm</div>
+        <div id="alarmStateLong" class="val-sm">&mdash;</div>
       </div>
-      <div class="card-label">Days</div>
-      <div id="day-checkboxes" class="day-checkboxes"></div>
-      <button id="save-schedule" class="btn primary">Save Alarm Time</button>
-      <span id="save-schedule-status" class="save-status"></span>
+      <div id="toggle" class="switch"><span class="knob"></span></div>
     </div>
-  </section>
-
-  <section id="tab-setup" class="tab">
-    <div class="card wide">
-      <div class="card-label">WiFi Credentials</div>
-      <div class="form-row">
-        <label for="wifi-ssid">SSID</label>
-        <input type="text" id="wifi-ssid" maxlength="32">
-      </div>
-      <div class="form-row">
-        <label for="wifi-pass">Password</label>
-        <input type="password" id="wifi-pass" maxlength="64">
-      </div>
-      <button id="save-wifi" class="btn primary">Save</button>
-      <span id="save-wifi-status" class="save-status"></span>
+    <div class="rule"></div>
+    <div>
+      <div class="lbl">Days</div>
+      <div id="dayChips" class="chips"></div>
+      <div id="alarmDays2" class="sub2"></div>
     </div>
+    <div class="rule"></div>
+    <div class="act">
+      <button type="button" id="saveSchedule" class="btn primary">Save alarm time</button>
+      <span id="saveStatus" class="ok"></span>
+    </div>
+    <div class="note">Stored to NVS, so it survives a reboot. The hourly chime is separate and always on.</div>
+  </aside>
+</section>
 
-    <div class="card wide">
-      <div class="card-label">Time Zone</div>
-      <div class="form-row">
-        <select id="timezone">
-          <option value="AEST">Australia Eastern</option>
-          <option value="MSK">Moscow</option>
-          <option value="CE">Central European</option>
-          <option value="GMT">GMT/British</option>
-          <option value="UTC">Universal (UTC)</option>
-          <option value="EST">US Eastern</option>
-          <option value="CST">US Central</option>
-          <option value="MST">US Mountain</option>
-          <option value="AZT">Arizona</option>
-          <option value="PST">US Pacific</option>
-          <option value="BRT">Brazil (S&atilde;o Paulo)</option>
-          <option value="SAST">South Africa</option>
-          <option value="GST">Gulf (Dubai)</option>
-          <option value="IST">India</option>
-          <option value="CNST">China</option>
-          <option value="JST">Japan</option>
-        </select>
+<section id="tab-setup" class="body">
+  <div class="main setup">
+    <div>
+      <div class="lbl">WiFi credentials</div>
+      <div class="sub prose">Currently joined to <span id="ssid2" class="mono ink">&mdash;</span>. Saving new credentials reconnects the device; if it fails it falls back to its own access point.</div>
+    </div>
+    <div class="form">
+      <label><span class="flbl">SSID</span><input type="text" id="wifiSsid" maxlength="32"></label>
+      <label><span class="flbl">Password</span><input type="password" id="wifiPass" maxlength="64" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;"></label>
+      <div class="act">
+        <button type="button" id="saveWifi" class="btn primary">Save</button>
+        <span id="wifiStatus" class="ok"></span>
       </div>
     </div>
-
-    <div class="card wide">
-      <div class="card-label">Maintenance</div>
-      <div class="form-row">
-        <a href="/update" class="btn">Firmware Update</a>
-        <button id="reboot" class="btn danger">Reboot</button>
+    <div class="rule"></div>
+    <div class="form">
+      <div class="lbl">Time zone</div>
+      <select id="timezone">
+        <option value="AEST">Australia Eastern</option>
+        <option value="MSK">Moscow</option>
+        <option value="CE">Central European</option>
+        <option value="GMT">GMT/British</option>
+        <option value="UTC">Universal (UTC)</option>
+        <option value="EST">US Eastern</option>
+        <option value="CST">US Central</option>
+        <option value="MST">US Mountain</option>
+        <option value="AZT">Arizona</option>
+        <option value="PST">US Pacific</option>
+        <option value="BRT">Brazil (S&atilde;o Paulo)</option>
+        <option value="SAST">South Africa</option>
+        <option value="GST">Gulf (Dubai)</option>
+        <option value="IST">India</option>
+        <option value="CNST">China</option>
+        <option value="JST">Japan</option>
+      </select>
+      <div class="note">Applied immediately &mdash; no save needed. DST is handled by the firmware's rules.</div>
+    </div>
+  </div>
+  <aside>
+    <div>
+      <div class="lbl">Device</div>
+      <div class="rows">
+        <div class="row"><span class="k">Hostname</span><span class="mono">clocky.local</span></div>
+        <div class="row"><span class="k">Signal</span><span id="rssi2" class="num">&mdash;</span></div>
+        <div class="row"><span class="k">Clock source</span><span id="clockSrc">&mdash;</span></div>
       </div>
     </div>
-  </section>
-</main>
+    <div class="rule"></div>
+    <div>
+      <div class="lbl">Maintenance</div>
+      <div class="stack">
+        <a href="/update" class="btn">Firmware update</a>
+        <button type="button" id="reboot" class="btn danger">Reboot</button>
+      </div>
+      <div id="rebootNote" class="note">Takes about 8 seconds. Settings are kept.</div>
+    </div>
+  </aside>
+</section>
 
+</div>
 <script src="/app.js"></script>
 </body>
 </html>
 )HTML";
 
 const char STYLE_CSS[] PROGMEM = R"CSS(
-:root {
-  --bg: #f2f4f3;
-  --card-bg: #ffffff;
-  --text: #1a1f1c;
-  --text-sub: #6b7570;
-  --accent: #2e5d7d;
-  --accent-contrast: #ffffff;
-  --border: #e1e5e2;
-  --danger: #c0392b;
-  --online: #2e7d5b;
-  --offline: #b0392b;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #14171a;
-    --card-bg: #1e2226;
-    --text: #eceff1;
-    --text-sub: #97a1a8;
-    --accent: #4596c9;
-    --accent-contrast: #0b0f12;
-    --border: #2b3136;
-    --danger: #e57373;
-    --online: #45b587;
-    --offline: #e57373;
-  }
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-}
-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem 1.25rem;
-}
-header h1 { font-size: 1.25rem; margin: 0; }
-.pill {
-  font-size: 0.75rem;
-  padding: 0.25rem 0.6rem;
-  border-radius: 1rem;
-  font-weight: 600;
-}
-.pill.online { background: var(--online); color: var(--accent-contrast); }
-.pill.offline { background: var(--offline); color: var(--accent-contrast); }
+*{box-sizing:border-box}
+body{margin:0;background:#f2f4f3;color:#1a1f1c;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:#2e5d7d;text-decoration:none}
+.wrap{max-width:1040px;margin:0 auto;min-height:100vh}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.nb{white-space:nowrap}
 
-.tabs {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0 1rem;
-  border-bottom: 1px solid var(--border);
-}
-.tab-btn {
-  background: none;
-  border: none;
-  color: var(--text-sub);
-  font-size: 0.95rem;
-  padding: 0.6rem 0.9rem;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-}
-.tab-btn.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-  font-weight: 600;
-}
-main { padding: 1rem; max-width: 720px; margin: 0 auto; }
-.tab { display: none; }
-.tab.active { display: block; }
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 22px;flex-wrap:wrap}
+header nav{display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}
+.brand{font:700 15px/1 system-ui}
+.tab-btn{font:400 12px/1 system-ui;color:#6b7570;padding-bottom:4px;border-bottom:2px solid transparent}
+.tab-btn.on{color:#2e5d7d;border-bottom-color:#2e5d7d}
+.conn{display:flex;align-items:center;gap:7px;font-size:11px;color:#6b7570;white-space:nowrap}
+.dot{width:6px;height:6px;border-radius:50%;display:block;background:#2e7d5b}
+.dot.off{background:#c0392b}
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-.card {
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  padding: 0.9rem 1rem;
-}
-.card.wide { margin-bottom: 0.75rem; }
-.card-label {
-  font-size: 0.75rem;
-  color: var(--text-sub);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  margin-bottom: 0.35rem;
-}
-.card-value { font-size: 1.5rem; font-weight: 600; }
-.card-value.small { font-size: 1.1rem; }
-.card-sub { font-size: 0.8rem; color: var(--text-sub); margin-top: 0.2rem; }
+.body{display:none;grid-template-columns:minmax(0,1fr) 320px;border-top:1px solid #e1e5e2}
+.body.on{display:grid}
+.main{padding:34px 30px 38px;display:flex;flex-direction:column;align-items:center;gap:20px;border-right:1px solid #e1e5e2}
+.main.setup{align-items:stretch;gap:26px;padding:32px 30px 38px}
+aside{padding:26px 24px;display:flex;flex-direction:column;gap:22px}
 
-.switch-row { display: flex; align-items: center; justify-content: space-between; }
-.switch { position: relative; display: inline-block; width: 48px; height: 28px; }
-.switch input { opacity: 0; width: 0; height: 0; }
-.switch .slider {
-  position: absolute; cursor: pointer; inset: 0;
-  background: var(--border); border-radius: 28px; transition: 0.15s;
-}
-.switch .slider::before {
-  content: ""; position: absolute; height: 22px; width: 22px; left: 3px; bottom: 3px;
-  background: var(--card-bg); border-radius: 50%; transition: 0.15s;
-}
-.switch input:checked + .slider { background: var(--accent); }
-.switch input:checked + .slider::before { transform: translateX(20px); }
+.face{display:block;width:100%;height:auto}
+.big-face{max-width:280px}
+.set-face{max-width:246px}
+.ctr{text-align:center}
+.huge{font:300 44px/1 system-ui;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.sub{font:400 12.5px/1.5 system-ui;color:#6b7570;letter-spacing:.02em}
+.ctr .sub{margin-top:10px}
+.prose{max-width:46ch}
+.ink{color:#1a1f1c;font-size:11.5px}
+.lbl{font:600 10px/1 system-ui;color:#6b7570;text-transform:uppercase;letter-spacing:.09em;margin-bottom:9px}
+.lblrow{display:flex;align-items:center;justify-content:space-between}
+.lblrow .lbl{margin-bottom:9px}
+.live{font-size:10.5px;color:#6b7570;margin-bottom:9px}
+.val{font:500 26px/1.1 system-ui;letter-spacing:-.01em}
+.val-sm{font:500 16px/1 system-ui}
+.sub2{font:400 12px/1 system-ui;color:#6b7570;margin-top:8px}
+.rule{height:1px;background:#e1e5e2}
+.rows{display:flex;flex-direction:column;gap:11px}
+.row{display:flex;justify-content:space-between;gap:12px;font:400 12.5px/1 system-ui}
+.row .k{color:#6b7570;white-space:nowrap}
+.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.row .mono{font-size:11.5px}
+pre#log{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;line-height:1.7;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto;margin:0;color:#6b7570}
 
-pre#log {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 200px;
-  overflow-y: auto;
-  margin: 0;
-  color: var(--text-sub);
-}
+.steppers{display:flex;align-items:flex-start;gap:22px}
+.stepper{display:flex;flex-direction:column;align-items:center;gap:10px}
+.stepper .lbl{margin:0}
+.digits{font:300 56px/1 system-ui;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.colon{font:300 56px/1 system-ui;color:#c3ccc8;padding-top:26px}
+.pm{display:flex;gap:6px}
+.pm button{width:36px;height:32px;border:1px solid #e1e5e2;background:#fff;color:#1a1f1c;border-radius:8px;font:400 15px/1 system-ui;cursor:pointer}
+.pm button:hover{border-color:#c3ccc8}
 
-.form-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.6rem;
-}
-.form-row label { font-size: 0.85rem; color: var(--text-sub); min-width: 4.5rem; }
-.form-row input[type="text"],
-.form-row input[type="password"],
-.form-row input[type="number"],
-.form-row select {
-  flex: 1;
-  min-width: 6rem;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  background: var(--bg);
-  color: var(--text);
-  font-size: 0.9rem;
-}
-.form-row input[type="number"] { max-width: 5rem; flex: none; }
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.switch-row .lbl{margin-bottom:8px}
+.switch{position:relative;width:48px;height:28px;border-radius:28px;flex:none;cursor:pointer;background:#e1e5e2;transition:background .15s}
+.switch.on{background:#2e5d7d}
+.knob{position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18);transition:transform .15s;display:block}
+.switch.on .knob{transform:translateX(20px)}
 
-.day-checkboxes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.8rem;
-}
-.day-btn {
-  border: 1px solid var(--border);
-  background: var(--card-bg);
-  color: var(--text);
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.7rem;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-.day-btn.active {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: var(--accent);
-}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{border-radius:8px;padding:8px 10px;font:500 12px/1 system-ui;cursor:pointer;border:1px solid #e1e5e2;background:#fff;color:#1a1f1c}
+.chips button.on{background:#2e5d7d;color:#fff;border-color:#2e5d7d}
+.chips+.sub2{margin-top:12px}
 
-.btn {
-  display: inline-block;
-  background: var(--card-bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  padding: 0.55rem 1rem;
-  font-size: 0.9rem;
-  cursor: pointer;
-  text-decoration: none;
+.form{display:flex;flex-direction:column;gap:14px;max-width:420px}
+.form label{display:flex;flex-direction:column;gap:7px}
+.flbl{font:400 12px/1 system-ui;color:#6b7570}
+input,select{padding:10px 12px;border:1px solid #e1e5e2;border-radius:8px;background:#fff;color:#1a1f1c;font:400 13.5px/1.2 system-ui;width:100%}
+input:focus,select:focus{outline:none;border-color:#2e5d7d}
+.act{display:flex;align-items:center;gap:12px}
+.ok{font:400 12px/1 system-ui;color:#2e7d5b}
+.note{font:400 11.5px/1.6 system-ui;color:#6b7570;margin-top:10px}
+.stack{display:flex;flex-direction:column;gap:9px;align-items:flex-start}
+.btn{display:inline-block;background:#fff;color:#1a1f1c;border:1px solid #e1e5e2;border-radius:8px;padding:10px 16px;font:500 13px/1 system-ui;cursor:pointer;white-space:nowrap;flex:none}
+.btn:hover{border-color:#c3ccc8}
+.btn.primary{background:#2e5d7d;color:#fff;border-color:#2e5d7d}
+.btn.primary:hover{background:#27506c;border-color:#27506c}
+.btn.danger{color:#c0392b;border-color:#eccfcb}
+.btn.danger:hover{background:#c0392b;color:#fff;border-color:#c0392b}
+
+@media (max-width:760px){
+  .body.on{grid-template-columns:minmax(0,1fr)}
+  .main{border-right:0;border-bottom:1px solid #e1e5e2;padding:26px 20px 30px}
+  aside{padding:22px 20px 28px}
+  header nav{gap:14px}
 }
-.btn.primary { background: var(--accent); color: var(--accent-contrast); border-color: var(--accent); }
-.btn.danger { background: var(--danger); color: var(--accent-contrast); border-color: var(--danger); }
-.save-status { font-size: 0.8rem; color: var(--text-sub); margin-left: 0.6rem; }
 )CSS";
 
 const char APP_JS[] PROGMEM = R"JS(
-// Single-page dashboard, no framework/build step. Polls GET /api/status once a
-// second (see refresh() at the bottom) and POSTs to /api/* on user actions.
-// Everything here runs from this one IIFE, sharing state via the closure
-// variables below instead of globals.
+// Wall-clock dashboard. No framework, no build step.
+//
+// Two independent loops:
+//   - the network loop polls GET /api/status once a second and applies the
+//     snapshot to the page (refresh(), applyStatus()),
+//   - the render loop runs on requestAnimationFrame and moves the clock hands
+//     from a locally extrapolated clock, so the second hand sweeps smoothly
+//     between polls instead of jumping once a second.
 (() => {
   const $ = (id) => document.getElementById(id);
-  let apMode = false;      // mirrors the server's ap_mode; drives syncBrowserTime()
-  let timeSynced = false;  // true once we've POSTed the browser clock this page load
-  let activeDays = 0x7F;   // local copy of the day-of-week alarm mask; bit 0 = Sunday
-  let daysBuilt = false;   // guards the one-time day-button DOM construction below
-  // True while the user has an unsaved edit in the hour/minute fields. Prevents
-  // the 1s status poll from overwriting what they just typed before they hit
-  // Save — see the fix note on the run-hour/run-minute polling below.
-  let scheduleDirty = false;
-  const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];  // index i == bit i of activeDays
+  const DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const DAYFULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const MONTH = ['January', 'February', 'March', 'April', 'May', 'June',
+                 'July', 'August', 'September', 'October', 'November', 'December'];
+  const p2 = (n) => String(n).padStart(2, '0');
 
-  // Tab switching: each button's data-tab attribute (e.g. "alarm") names the
-  // section to show, matched by id ("tab-alarm"). Purely a CSS class toggle —
-  // all three tabs' markup is always in the DOM, just hidden via .tab.active.
+  // --- device clock, extrapolated between polls -----------------------------
+  // baseSec is the device's second-of-day from the last /api/status; baseAt is
+  // the performance.now() reading at the moment we received it. deviceSec()
+  // adds the elapsed wall time since, so the hands keep moving (and the second
+  // hand keeps sweeping) even though the device is only polled at 1Hz.
+  let baseSec = null, baseAt = 0;
+  let weekday = 0, month = 1, mday = 1;   // from the last status; refreshed each poll
+  let haveStatus = false;
+
+  function deviceSec() {
+    if (baseSec === null) return null;
+    return baseSec + (performance.now() - baseAt) / 1000;
+  }
+
+  // --- local (unsaved) alarm edit state -------------------------------------
+  // The day chips and hour/minute steppers write here and stay local until
+  // "Save alarm time" is pressed; `dirty` stops the 1s poll from reverting an
+  // in-progress edit. The on/off switch is not part of this — it POSTs
+  // immediately, so it is always read straight from the server.
+  let ah = 7, am = 30, days = 0x7F, alarmOn = true;
+  let seeded = false, dirty = false;
+  let apMode = false, timeSynced = false;
+
+  // --- static geometry ------------------------------------------------------
+  // Both faces share the same tick ring; built once here and written into
+  // every .minor/.major path in the document.
+  (function buildTicks() {
+    const minor = [], major = [];
+    for (let i = 0; i < 60; i++) {
+      const a = (i * 6 - 90) * Math.PI / 180;
+      const isMajor = i % 5 === 0;
+      const r1 = isMajor ? 74 : 80;
+      const x1 = (100 + Math.cos(a) * r1).toFixed(2), y1 = (100 + Math.sin(a) * r1).toFixed(2);
+      const x2 = (100 + Math.cos(a) * 88).toFixed(2), y2 = (100 + Math.sin(a) * 88).toFixed(2);
+      (isMajor ? major : minor).push('M' + x1 + ' ' + y1 + 'L' + x2 + ' ' + y2);
+    }
+    document.querySelectorAll('.minor').forEach((el) => el.setAttribute('d', minor.join('')));
+    document.querySelectorAll('.major').forEach((el) => el.setAttribute('d', major.join('')));
+  })();
+
+  const rot = (el, deg) => el.setAttribute('transform', 'rotate(' + deg.toFixed(3) + ' 100 100)');
+
+  // --- tabs -----------------------------------------------------------------
   document.querySelectorAll('.tab-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('active'));
-      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
-      btn.classList.add('active');
-      $('tab-' + btn.dataset.tab).classList.add('active');
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      document.querySelectorAll('.tab-btn').forEach((b) => b.classList.remove('on'));
+      document.querySelectorAll('.body').forEach((s) => s.classList.remove('on'));
+      btn.classList.add('on');
+      $('tab-' + btn.dataset.tab).classList.add('on');
     });
   });
 
-  // Builds the Sun..Sat day-toggle buttons once. Each button's own click
-  // handler flips its bit in `activeDays` directly and updates its own
-  // highlight — there's no separate "read the buttons back" step, `activeDays`
-  // is the single source of truth these buttons write into and read from.
-  function buildDayCheckboxes() {
-    const el = $('day-checkboxes');
-    el.innerHTML = '';
-    DAY_NAMES.forEach((name, i) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'day-btn';
-      btn.id = 'day-btn-' + i;
-      btn.textContent = name;
-      btn.addEventListener('click', () => {
-        activeDays ^= (1 << i);
-        btn.classList.toggle('active', !!(activeDays & (1 << i)));
-      });
-      el.appendChild(btn);
-    });
+  // --- text helpers ---------------------------------------------------------
+  function daysPhrase() {
+    if (!alarmOn) return 'Alarm off';
+    const on = DAY.filter((_, i) => days & (1 << i));
+    if (on.length === 7) return 'Every day';
+    if (on.length === 0) return 'No days selected';
+    if (on.length === 5 && !(days & 1) && !(days & 64)) return 'Weekdays';
+    return on.join(', ');
   }
 
-  // Sets activeDays (and the buttons' highlighted state) from a server value.
-  // Only called once, right after buildDayCheckboxes() — see the `!daysBuilt`
-  // guard in applyStatus() — so a day the user is actively toggling can't get
-  // silently reverted by the next status poll.
-  function applyActiveDays(mask) {
-    activeDays = mask;
-    DAY_NAMES.forEach((_, i) => {
-      const btn = $('day-btn-' + i);
-      if (btn) btn.classList.toggle('active', !!(mask & (1 << i)));
-    });
-  }
-
-  // Computes the "Next Alarm" status card text (e.g. "Tomorrow 7:30 AM") from
-  // a /api/status response. Walks forward day-by-day from today (s.weekday)
-  // looking for the next active day; for today specifically, it also checks
-  // whether the alarm time has already passed, in which case today doesn't
-  // count and the search continues to tomorrow. offset goes up to 8, not 7,
-  // so that if every day is active, today (offset 0) can be skipped for
-  // already-passed and the loop still finds next week's "today" at offset 7.
-  function describeNextAlarm(s) {
-    if (s.disabled || !(s.activeDays & 0x7F)) return 'Off';
+  // Port of describeNextAlarm() from the original dashboard: walks forward from
+  // today looking for the next active day, skipping today if its alarm time
+  // has already gone by. offset runs to 8 so that with every day active,
+  // today-already-passed still resolves to next week's same weekday.
+  function describeNextAlarm() {
+    if (!alarmOn || !(days & 0x7F) || baseSec === null) return 'Off';
+    const nowMin = Math.floor(deviceSec() / 60) % 1440;
     for (let offset = 0; offset < 8; offset++) {
-      const day = (s.weekday - 1 + offset) % 7;  // weekday: 1=Sun..7=Sat -> 0-indexed
-      if (!(s.activeDays & (1 << day))) continue;
-      if (offset === 0) {
-        // s.time is "HH:MM:SS ..."; compare minute-of-day so "already passed
-        // today" skips to the next active day instead of showing a time
-        // that's already gone by.
-        const nowMinutes = parseInt(s.time.slice(0, 2), 10) * 60 + parseInt(s.time.slice(3, 5), 10);
-        if (s.runHour * 60 + s.runMinute <= nowMinutes) continue;
-      }
-      const h = s.runHour % 12 === 0 ? 12 : s.runHour % 12;
-      const ampm = s.runHour < 12 ? 'AM' : 'PM';
-      const label = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : DAY_NAMES[day];
-      return label + ' ' + h + ':' + String(s.runMinute).padStart(2, '0') + ' ' + ampm;
+      const day = (weekday - 1 + offset) % 7;   // status.weekday is 1=Sun..7=Sat
+      if (!(days & (1 << day))) continue;
+      if (offset === 0 && ah * 60 + am <= nowMin) continue;
+      const h12 = ah % 12 === 0 ? 12 : ah % 12;
+      const label = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow' : DAY[day];
+      return label + ' ' + h12 + ':' + p2(am) + ' ' + (ah < 12 ? 'AM' : 'PM');
     }
-    return 'Off';  // no active day had a still-upcoming time (shouldn't normally happen)
+    return 'Off';
   }
 
-  // Gives the device a rough clock when it has no internet access (AP mode,
-  // so no NTP). One-shot per page load (guarded by timeSynced) — the device
-  // ignores this once it's on real Wi-Fi, see handleSetTime() in
-  // web_server.cpp.
+  // Everything that depends on the local alarm edit state, in one place so the
+  // steppers, chips and switch can all just call this after mutating it.
+  function renderAlarm() {
+    $('ahStr').textContent = p2(ah);
+    $('amStr').textContent = p2(am);
+    rot($('ahh'), (ah % 12) * 30 + am * 0.5);
+    rot($('amh'), am * 6);
+    const c = alarmOn ? '#2e5d7d' : '#c3ccc8';
+    $('ahh').setAttribute('stroke', c);
+    $('amh').setAttribute('stroke', c);
+    $('acap').setAttribute('fill', c);
+
+    const phrase = daysPhrase();
+    $('alarmClause').textContent = alarmOn
+      ? 'Rings ' + phrase.toLowerCase() + ' at ' + p2(ah) + ':' + p2(am)
+      : 'Alarm is muted';
+    $('alarmDays').textContent = phrase;
+    $('alarmDays2').textContent = phrase;
+    $('nextAlarm').textContent = describeNextAlarm();
+    $('alarmState').textContent = alarmOn ? 'On' : 'Off';
+    $('alarmStateLong').textContent = alarmOn ? 'Alarm on' : 'Alarm off';
+    $('toggle').classList.toggle('on', alarmOn);
+    document.querySelectorAll('#dayChips button').forEach((b, i) => {
+      b.classList.toggle('on', !!(days & (1 << i)));
+    });
+  }
+
+  // --- render loop ----------------------------------------------------------
+  function tick() {
+    const t = deviceSec();
+    if (t !== null) {
+      const sec = t % 60, mins = Math.floor(t / 60) % 60, hrs = Math.floor(t / 3600) % 24;
+      rot($('hh'), (hrs % 12) * 30 + mins * 0.5);
+      rot($('mh'), mins * 6 + sec * 0.1);
+      rot($('sh'), sec * 6);
+      $('clockHM').textContent = p2(hrs) + ':' + p2(mins);
+      // Ghosted "current time" hands on the alarm-setting face
+      rot($('ghh'), (hrs % 12) * 30 + mins * 0.5);
+      rot($('gmh'), mins * 6);
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  // --- day chips ------------------------------------------------------------
+  DAY.forEach((name, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = name;
+    b.addEventListener('click', () => { days ^= (1 << i); dirty = true; renderAlarm(); });
+    $('dayChips').appendChild(b);
+  });
+
+  // --- status polling -------------------------------------------------------
+  function post(url, body) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  // Gives the device a rough clock when it has no internet (AP mode, no NTP).
+  // One-shot per page load; ignored by the firmware once on real Wi-Fi.
   function syncBrowserTime() {
     if (timeSynced) return;
     timeSynced = true;
-    fetch('/api/settime', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ epoch: Math.floor(Date.now() / 1000) }),
-    });
+    post('/api/settime', { epoch: Math.floor(Date.now() / 1000) });
   }
 
-  // Applies one /api/status response to the whole page. Called every second
-  // by refresh() below.
   function applyStatus(s) {
-    $('conn').textContent = 'online';
-    $('conn').className = 'pill online';
+    $('conn').textContent = 'online \u00b7 ' + s.rssi + ' dBm';
+    $('dot').className = 'dot';
 
-    $('time').textContent = s.time;
-    $('tz').textContent = s.timezone;
+    // s.time is "HH:MM:SS MM/DD"
+    const hh = +s.time.slice(0, 2), mm = +s.time.slice(3, 5), ss = +s.time.slice(6, 8);
+    baseSec = hh * 3600 + mm * 60 + ss;
+    baseAt = performance.now();
+    weekday = s.weekday;
+    month = +s.time.slice(9, 11);
+    mday = +s.time.slice(12, 14);
+
+    $('dateLong').textContent = DAYFULL[(s.weekday - 1) % 7] + ', ' + MONTH[month - 1] + ' ' + mday;
+    $('tzName').textContent = s.timezone;
     $('rssi').textContent = s.rssi + ' dBm';
-
-    $('alarm-toggle').checked = !s.disabled;
-    $('alarm-state').textContent = s.disabled ? 'Alarm OFF' : 'Alarm ON';
-    $('next-alarm').textContent = describeNextAlarm(s);
-
+    $('rssi2').textContent = s.rssi + ' dBm';
+    $('ssid').textContent = s.ssid || '\u2014';
+    $('ssid2').textContent = s.ssid || '\u2014';
+    $('clockSrc').textContent = s.apMode ? 'Browser (AP mode)' : 'NTP';
     $('log').textContent = s.log;
-
-    // Only overwrite the hour/minute inputs from the server while the user
-    // isn't mid-edit. Without this guard, this 1-second poll would stomp
-    // whichever field currently doesn't have focus — e.g. editing the hour
-    // field, then tabbing to minute, would get the hour field reverted back
-    // to its old value by the next poll tick, before Save was ever clicked.
-    if (!scheduleDirty) {
-      $('run-hour').value = s.runHour;
-      $('run-minute').value = s.runMinute;
-    }
-
-    // Day buttons and activeDays are seeded from the server exactly once, the
-    // first time status loads — after that the buttons themselves own
-    // activeDays until Save is clicked (see buildDayCheckboxes()).
-    if (!daysBuilt) {
-      buildDayCheckboxes();
-      applyActiveDays(s.activeDays);
-      daysBuilt = true;
-    }
-
-    $('wifi-ssid').placeholder = s.ssid || '';
+    $('wifiSsid').placeholder = s.ssid || '';
     if (s.timezoneCode) $('timezone').value = s.timezoneCode;
+
+    // The switch POSTs immediately, so the server is always authoritative for
+    // it. Hour/minute/days are seeded once and then owned by the UI until Save.
+    alarmOn = !s.disabled;
+    if (!seeded || !dirty) {
+      ah = s.runHour;
+      am = s.runMinute;
+      days = s.activeDays;
+      seeded = true;
+    }
+    renderAlarm();
 
     apMode = s.apMode;
     if (apMode) syncBrowserTime();
+    haveStatus = true;
   }
 
-  // The heartbeat: fetches /api/status and applies it, or shows "offline" if
-  // the device didn't respond (e.g. it's mid-reboot). Called immediately and
-  // then every second, at the bottom of this file.
   function refresh() {
     fetch('/api/status')
       .then((r) => r.json())
       .then(applyStatus)
       .catch(() => {
         $('conn').textContent = 'offline';
-        $('conn').className = 'pill offline';
+        $('dot').className = 'dot off';
       });
   }
 
-  $('alarm-toggle').addEventListener('change', (e) => {
-    fetch('/api/alarm', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ disable: !e.target.checked }),
-    }).then(refresh);
+  // --- controls -------------------------------------------------------------
+  function flash(id, text) {
+    const el = $(id);
+    el.textContent = text;
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.textContent = ''; }, 2000);
+  }
+
+  const wrap = (v, max) => (v + max + 1) % (max + 1);
+  $('hUp').addEventListener('click', () => { ah = wrap(ah + 1, 23); dirty = true; renderAlarm(); });
+  $('hDown').addEventListener('click', () => { ah = wrap(ah - 1, 23); dirty = true; renderAlarm(); });
+  $('mUp').addEventListener('click', () => { am = wrap(am + 1, 59); dirty = true; renderAlarm(); });
+  $('mDown').addEventListener('click', () => { am = wrap(am - 1, 59); dirty = true; renderAlarm(); });
+
+  $('toggle').addEventListener('click', () => {
+    alarmOn = !alarmOn;
+    renderAlarm();
+    post('/api/alarm', { disable: !alarmOn }).then(refresh);
   });
 
-  // Mark the schedule fields dirty the moment the user types in either one,
-  // so the next status poll (up to 1s away) doesn't overwrite what they're
-  // editing. Cleared again once Save succeeds, below.
-  $('run-hour').addEventListener('input', () => { scheduleDirty = true; });
-  $('run-minute').addEventListener('input', () => { scheduleDirty = true; });
-
-  $('save-schedule').addEventListener('click', () => {
-    const body = {
-      hour: parseInt($('run-hour').value, 10),
-      minute: parseInt($('run-minute').value, 10),
-      activeDays: activeDays,
-    };
-    fetch('/api/schedule', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).then(() => {
-      scheduleDirty = false;  // safe to let polling overwrite the fields again
-      $('save-schedule-status').textContent = 'Saved';
-      setTimeout(() => { $('save-schedule-status').textContent = ''; }, 2000);
+  $('saveSchedule').addEventListener('click', () => {
+    post('/api/schedule', { hour: ah, minute: am, activeDays: days }).then(() => {
+      dirty = false;   // safe to let polling own these fields again
+      flash('saveStatus', 'Saved');
+      refresh();
     });
   });
 
-  $('save-wifi').addEventListener('click', () => {
-    fetch('/api/wifi', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ssid: $('wifi-ssid').value,
-        pass: $('wifi-pass').value,
-      }),
-    }).then(() => {
-      $('save-wifi-status').textContent = 'Saved';
-      setTimeout(() => { $('save-wifi-status').textContent = ''; }, 2000);
-    });
+  $('saveWifi').addEventListener('click', () => {
+    post('/api/wifi', { ssid: $('wifiSsid').value, pass: $('wifiPass').value })
+      .then(() => flash('wifiStatus', 'Saved'));
   });
 
   $('timezone').addEventListener('change', (e) => {
-    fetch('/api/timezone', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tz: e.target.value }),
-    }).then(refresh);
+    post('/api/timezone', { tz: e.target.value }).then(refresh);
   });
 
   $('reboot').addEventListener('click', () => {
-    if (confirm('Reboot Clocky now?')) {
-      fetch('/api/reboot', { method: 'POST' });
-    }
+    if (!confirm('Reboot Clocky now?')) return;
+    fetch('/api/reboot', { method: 'POST' });
+    $('rebootNote').textContent = 'Rebooting\u2026 the page will go offline for a few seconds.';
+    setTimeout(() => { $('rebootNote').textContent = 'Takes about 8 seconds. Settings are kept.'; }, 12000);
   });
 
-  refresh();                    // populate the page immediately on load...
-  setInterval(refresh, 1000);   // ...then keep it live, once a second
+  renderAlarm();
+  refresh();
+  setInterval(refresh, 1000);
 })();
 )JS";

@@ -72,6 +72,8 @@ CircularBuffer<float, 24> dayBuffer;
 #include "clocky.h"
 #include "stocks.h"
 
+#include <Ticker.h>
+
 //Function Prototypes
 void runAlarm(void);
 bool readTouch(void);
@@ -297,6 +299,103 @@ void updateOledDisplay(void) {
   display.display();
 }
 
+// --- Alarm tune ---
+// The settable alarm plays this little tune on a loop until a touch silences
+// it. Notes are stepped by a Ticker (a hardware-timer callback) rather than
+// from loop(), because loop() only comes round every ~200ms (touch sampling)
+// and stalls for seconds at a time (hourly chime, stock fetch) — far too
+// uneven to keep a rhythm. freq 0 = a rest.
+struct Note {
+  uint16_t freq;  // Hz
+  uint8_t beats;  // how many ALARM_BEAT_MS until the next note starts
+};
+
+// Which tune the alarm plays — a compile-time choice:
+//   0 = a short original ditty
+//   1 = "The Sailor's Hornpipe" (traditional; a.k.a. the College Hornpipe) (default)
+// Change the default here, or override it without editing this file by adding
+// `-D ALARM_TUNE=0` to build_flags in platformio.ini.
+#ifndef ALARM_TUNE
+#define ALARM_TUNE 1
+#endif
+
+// Note frequencies (equal temperament; S = sharp). Both tunes are pitched to
+// sit at or below ~3 kHz, where the piezo buzzer resonates.
+enum : uint16_t {
+  N_G5 = 784, N_A5 = 880, N_B5 = 988, N_C6 = 1047, N_CS6 = 1109, N_D6 = 1175, N_E6 = 1319, N_FS6 = 1480,
+  N_G6 = 1568, N_A6 = 1760, N_B6 = 1976, N_C7 = 2093, N_D7 = 2349, N_E7 = 2637, N_FS7 = 2960, N_G7 = 3136
+};
+
+#if ALARM_TUNE == 1
+// The Sailor's Hornpipe, in G, two octaves above written pitch. One table row
+// per bar; a beat is an eighth note. Both 8-bar parts are played once each
+// (no repeats), then a short rest before the whole thing loops.
+static const uint16_t ALARM_BEAT_MS = 140;
+static const Note alarmTune[] = {
+  // --- first part ---
+  { N_G6, 1 }, { N_FS6, 1 },
+  { N_G6, 2 }, { N_G5, 2 }, { N_G5, 2 }, { N_D6, 1 }, { N_C6, 1 },
+  { N_B5, 1 }, { N_D6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_G6, 1 },
+  { N_A6, 2 }, { N_A5, 2 }, { N_A5, 2 }, { N_A6, 1 }, { N_G6, 1 },
+  { N_FS6, 1 }, { N_A6, 1 }, { N_D7, 2 }, { N_D7, 2 }, { N_E7, 1 }, { N_FS7, 1 },
+  { N_G7, 1 }, { N_FS7, 1 }, { N_E7, 1 }, { N_D7, 1 }, { N_E7, 1 }, { N_D7, 1 }, { N_C7, 1 }, { N_B6, 1 },
+  { N_C7, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_G6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_E6, 1 }, { N_D6, 1 },
+  { N_E6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_A6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_C7, 1 },
+  { N_B6, 2 }, { N_G6, 2 }, { N_G6, 2 },
+  // --- second part ---
+  { N_D6, 1 }, { N_C6, 1 },
+  { N_B5, 1 }, { N_D6, 1 }, { N_G6, 1 }, { N_D6, 1 }, { N_B5, 1 }, { N_D6, 1 }, { N_G6, 1 }, { N_D6, 1 },
+  { N_E6, 2 }, { N_C6, 2 }, { N_C6, 2 }, { N_E6, 1 }, { N_D6, 1 },
+  { N_CS6, 1 }, { N_E6, 1 }, { N_A6, 1 }, { N_E6, 1 }, { N_CS6, 1 }, { N_E6, 1 }, { N_A6, 1 }, { N_E6, 1 },
+  { N_FS6, 2 }, { N_D6, 2 }, { N_D6, 2 }, { N_A6, 1 }, { N_B6, 1 },
+  { N_C7, 1 }, { N_B6, 1 }, { N_C7, 1 }, { N_D7, 1 }, { N_E7, 1 }, { N_D7, 1 }, { N_C7, 1 }, { N_B6, 1 },
+  { N_C7, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_G6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_E6, 1 }, { N_D6, 1 },
+  { N_E6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_A6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_C7, 1 },
+  { N_B6, 2 }, { N_G6, 2 }, { N_G6, 2 },
+  { 0, 6 },
+};
+#else
+// The original ditty, in G: four short phrases, then a pause.
+static const uint16_t ALARM_BEAT_MS = 170;
+static const Note alarmTune[] = {
+  { N_D6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_D7, 2 }, { N_B6, 1 }, { N_D7, 3 }, { 0, 1 },
+  { N_E7, 1 }, { N_D7, 1 }, { N_B6, 1 }, { N_G6, 2 }, { N_A6, 1 }, { N_B6, 3 }, { 0, 1 },
+  { N_D6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_D7, 2 }, { N_B6, 1 }, { N_E7, 3 }, { 0, 1 },
+  { N_D7, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_G6, 2 }, { N_FS6, 1 }, { N_G6, 3 }, { 0, 5 },
+};
+#endif
+static const uint8_t ALARM_TUNE_LEN = sizeof(alarmTune) / sizeof(alarmTune[0]);
+
+static Ticker alarmTicker;
+static volatile bool alarmRinging = false;  // true from the alarm firing until a touch
+static uint8_t alarmNoteIdx = 0;
+
+// Ticker callback: sound the current note and schedule the next one.
+static void playNextAlarmNote() {
+  if (!alarmRinging) return;
+  const Note &n = alarmTune[alarmNoteIdx];
+  alarmNoteIdx = (alarmNoteIdx + 1) % ALARM_TUNE_LEN;
+  uint32_t ms = (uint32_t)n.beats * ALARM_BEAT_MS;
+  if (n.freq) {
+    tone(BUZZER_PIN, n.freq, ms - 25);  // stop a touch early so repeated notes stay distinct
+  } else {
+    noTone(BUZZER_PIN);
+  }
+  alarmTicker.once_ms(ms, playNextAlarmNote);
+}
+
+static void startAlarmTune() {
+  alarmNoteIdx = 0;
+  alarmRinging = true;
+  playNextAlarmNote();
+}
+
+static void stopAlarmTune() {
+  alarmRinging = false;
+  alarmTicker.detach();
+  noTone(BUZZER_PIN);
+}
+
 // Called every loop() iteration. Handles two independent things: the hourly
 // chime (always active unless in sleep mode) and the settable alarm (gated by
 // disable/activeDays). Both compare against the same `now()` snapshot so they
@@ -309,10 +408,11 @@ void runAlarm() {
   if (hr == 0) hr = 12;
 
   // Hourly chime: rings once per hour of the 12-hour clock (e.g. 7 chimes at
-  // 7:00), muted only by sleep mode — NOT by the `disable`/alarm settings below.
+  // 7:00), muted only by sleep mode — NOT by the `disable`/alarm settings below —
+  // and skipped while the alarm tune is playing, so the two don't talk over each other.
   // This whole block is blocking (delay() calls totalling ~1s per chime), so at
   // 12 o'clock it can tie up loop() for several seconds.
-  if (minute(t) == 0 && second(t) == 0 && currentMode() != MODE_SLEEP) {
+  if (minute(t) == 0 && second(t) == 0 && currentMode() != MODE_SLEEP && !alarmRinging) {
     for (int i = 0; i < hr; i++) {
       tone(BUZZER_PIN, highTone, 150);  // c#7
       delay(300);
@@ -339,7 +439,7 @@ void runAlarm() {
   if (minuteOfDay == runHour * 60 + runMinute && minuteOfDay != lastFiredMinuteOfDay) {
     lastFiredMinuteOfDay = minuteOfDay;
     webPrint("Alarm run at: %d hour and %d minutes\n", runHour, runMinute);
-    tone(BUZZER_PIN, highTone);
+    startAlarmTune();  // loops until a touch calls stopAlarmTune()
   }
 }
 
@@ -420,7 +520,7 @@ void loop() {
     buttonState = reading;
     if (buttonState == HIGH) {
       buttonPressCounter++;  // steps to the next mode (clock/stocks/sleep); see updateOledDisplay()
-      noTone(BUZZER_PIN);          // a touch silences an in-progress alarm
+      stopAlarmTune();             // a touch silences an in-progress alarm
       tone(BUZZER_PIN, 2020, 30);  // short beep to confirm the touch registered
       delay(30);
       webPrint("Button press count: %02d\n", buttonPressCounter);

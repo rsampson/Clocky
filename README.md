@@ -9,7 +9,7 @@ A simple desk clock for the ESP8266 / ESP32 with a web interface for configurati
 - Synchronizes time over NTP and automatically corrects for daylight saving time.
 - Web interface for setting the time zone, alarm, and Wi-Fi credentials.
 - Displays day of week, date, month, and 12-hour time.
-- Hourly chime and settable alarm via a piezo beeper, with per-day scheduling (e.g. weekdays only) and a "next alarm" readout on the dashboard.
+- Hourly chime and settable alarm via a piezo beeper. The alarm plays "The Sailor's Hornpipe" on a loop until the touch pad is touched (a short alternative tune can be selected at compile time with `ALARM_TUNE` in [`src/Clocky.cpp`](src/Clocky.cpp)). Alarms have per-day scheduling (e.g. weekdays only) and a "next alarm" readout on the dashboard.
 - Three display modes, stepped through with a touch pad: desk clock → stock indexes → sleep → desk clock.
 - Stock-index mode that shows the current Dow, S&P 500, and Nasdaq Composite values (fetched from Yahoo Finance every 5 minutes while the mode is selected), each with an up/down marker versus the previous close. If the values can't be fetched (no Wi-Fi, no internet, the data source is down), this mode simply shows the normal clock until they can.
 - Sleep mode that suppresses the display light and the hourly chime. The settable alarm still sounds in sleep mode (that's the point of an alarm) and is silenced with a touch.

@@ -21,11 +21,14 @@
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);   // SDA connects to D2, SCL  to D1 on the Wemos mini esp8266
 
-bool buttonState;  // debounced touch-pad state: LOW = desk-clock mode, HIGH = sleep mode
+bool buttonState;  // debounced touch-pad state: HIGH while the pad is being touched
 //bool lastButtonState = LOW;  // the previous reading from the input pin
-// Counts touches since boot. Only its parity (even/odd) matters: even = desk-clock
-// mode, odd = sleep mode. See updateOledDisplay()'s `buttonPressCounter % 2` switch.
+// Counts touches since boot. Only its value modulo NUM_MODES matters: each
+// touch steps to the next mode, clock -> stocks -> sleep -> clock ...
+// See currentMode() and updateOledDisplay().
 unsigned int buttonPressCounter;
+enum DisplayMode { MODE_CLOCK = 0, MODE_STOCKS = 1, MODE_SLEEP = 2, NUM_MODES = 3 };
+static inline int currentMode() { return buttonPressCounter % NUM_MODES; }
 
 #if defined(ESP32)
 #include <WiFi.h>
@@ -67,6 +70,7 @@ CircularBuffer<float, 24> dayBuffer;
 
 #include "web_server.h"
 #include "clocky.h"
+#include "stocks.h"
 
 //Function Prototypes
 void runAlarm(void);
@@ -161,9 +165,77 @@ void setup() {
 
 unsigned int deltaTime;  // last measured touch-pad RC rise time, in microseconds (see readTouch())
 
-// Called twice a second from loop(). Which of the two display modes is shown
-// depends only on whether buttonPressCounter (bumped once per touch) is even
-// or odd — there's no separate "mode" variable.
+// Sets up font/cursor and fills buf with what the desk clock shows right now.
+// Cycles based on the current second, so day-of-week and date each get one
+// 1-second slot per 5 seconds, while the time itself (the thing you actually
+// glance at) gets 3 of the 5 slots. Shared by clock mode and by stock mode's
+// fallback when no fresh stock data is available.
+static void prepClockFace(char *buf) {
+  int hr = hour() % 12;
+  if (hr == 0) hr = 12;  // convert 24h hour() to 12h display, with 0 shown as 12
+
+  switch (second() % 5) {
+    case 0:  // day of week, e.g. "Mon"
+      display.setFont(&FreeSans18pt7b);
+      display.setCursor(0, 28);
+      sprintf(buf, "   %s", dayShortStr(weekday()));
+      break;
+    case 1:  // display time 3 times longer than day of week or date
+    case 2:
+    case 3:
+      display.setFont(&FreeSans24pt7b);
+      display.setCursor(3, 31);
+      sprintf(buf, "%2d:%02d", hr, minute());
+      //sprintf(buf, "%3d", deltaTime);  // hack to debug touch switch
+      break;
+    case 4:  // month + day, e.g. "Aug 22"
+      display.setFont(&FreeSans12pt7b);
+      display.setCursor(12, 25);
+      sprintf(buf, " %s %2d", monthShortStr(month()), day());
+      break;
+  }
+}
+
+// Stock mode's face: each index gets 3 seconds — its name for 1 second, then
+// its value for 2 — so the three indexes rotate every 9 seconds, in the same
+// spirit as the clock's day/time/date rotation. Values are rounded to whole
+// points (5 digits is all that fits at this font size) with a small
+// up/down triangle at the right showing direction versus the previous close.
+static void prepStockFace(char *buf) {
+  unsigned int slot = now() % (NUM_STOCKS * 3);
+  const StockIndex &s = stocks[slot / 3];
+  bool showValue = (slot % 3) != 0;
+
+  if (showValue) {
+    sprintf(buf, "%ld", lroundf(s.price));
+  } else {
+    sprintf(buf, "%s", s.label);
+  }
+
+  // Centre the text in the space left of the triangle (value) or on the
+  // whole screen (name).
+  const int arrowW = 12;
+  int avail = showValue ? SCREEN_WIDTH - arrowW - 2 : SCREEN_WIDTH;
+  int16_t x1, y1;
+  uint16_t w, h;
+  display.setFont(&FreeSans18pt7b);
+  display.getTextBounds(buf, 0, 28, &x1, &y1, &w, &h);
+  int x = (avail - (int)w) / 2 - x1;
+  display.setCursor(x < 0 ? 0 : x, 28);
+
+  if (showValue && s.price != s.prevClose) {
+    int ax = SCREEN_WIDTH - arrowW;  // left edge of the triangle
+    if (s.price > s.prevClose) {
+      display.fillTriangle(ax, 22, ax + arrowW - 1, 22, ax + arrowW / 2, 10, SSD1306_WHITE);  // up
+    } else {
+      display.fillTriangle(ax, 10, ax + arrowW - 1, 10, ax + arrowW / 2, 22, SSD1306_WHITE);  // down
+    }
+  }
+}
+
+// Called twice a second from loop(). Which of the three display modes is
+// shown depends only on buttonPressCounter (bumped once per touch) modulo
+// NUM_MODES — there's no separate "mode" variable. See currentMode().
 void updateOledDisplay(void) {
 
   char buf[20];
@@ -186,49 +258,32 @@ void updateOledDisplay(void) {
   sprintf(buf, " ");
   //display.setTextColor(SSD1306_WHITE);
   //display.invertDisplay(true);
-  int hr = hour() % 12;
-  if (hr == 0) hr = 12;  // convert 24h hour() to 12h display, with 0 shown as 12
 
-  switch (buttonPressCounter % 2) {
-    // case 0:                       // initial state
-    //   digitalWrite(ledPin, LOW);  // turn on the night lite
-    //   noTone(BUZZER_PIN);         // kill alarm
-    //   sprintf(buf, " ");
-    //   break;
-    case 0:                        // desk-clock mode (even touch count, including 0 = default at boot)
+  switch (currentMode()) {
+    case MODE_CLOCK:               // desk-clock mode (the default at boot)
       digitalWrite(ledPin, LOW);  // turn on the night lite
       display.stopscroll();
-      // Cycle what's shown based on the current second, so day-of-week and
-      // date each get one 1-second slot per 5 seconds, while the time itself
-      // (the thing you actually glance at) gets 3 of the 5 slots.
-      switch (second() % 5) {
-        case 0:  // day of week, e.g. "Mon"
-          display.setFont(&FreeSans18pt7b);
-          display.setCursor(0, 28);
-          sprintf(buf, "   %s", dayShortStr(weekday()));
-          break;
-        case 1:  // display time 3 times longer than day of week or date
-        case 2:
-        case 3:
-          display.setFont(&FreeSans24pt7b);
-          display.setCursor(3, 31);
-          sprintf(buf, "%2d:%02d", hr, minute());
-          //sprintf(buf, "%3d", deltaTime);  // hack to debug touch switch
-          break;
-        case 4:  // month + day, e.g. "Aug 22"
-          display.setFont(&FreeSans12pt7b);
-          display.setCursor(12, 25);
-          sprintf(buf, " %s %2d", monthShortStr(month()), day());
-          break;
+      prepClockFace(buf);
+      break;
+    case MODE_STOCKS:              // stock-index mode: Dow / S&P 500 / Nasdaq
+      digitalWrite(ledPin, LOW);  // turn on the night lite
+      display.stopscroll();
+      // No fresh data (still fetching, WiFi down, fetch failed, data gone
+      // stale): behave exactly like the desk clock until handleStocks() in
+      // loop() gets good values.
+      if (stocksFresh()) {
+        prepStockFace(buf);
+      } else {
+        prepClockFace(buf);
       }
       break;
-    case 1:  // sleep mode (odd touch count): screen mostly dark
+    case MODE_SLEEP:  // sleep mode: screen mostly dark
       digitalWrite(ledPin, HIGH) ;  // turn off the night lite
       // NOTE: deliberately no noTone() here. Sleep mode only suppresses the
       // display light; the settable alarm must keep sounding to wake the user
-      // (it's silenced by a touch, which flips back to desk-clock mode). The
+      // (it's silenced by a touch, which steps on to desk-clock mode). The
       // hourly chime is already prevented from ringing in sleep mode by the
-      // (buttonPressCounter % 2) != 1 guard in runAlarm().
+      // currentMode() != MODE_SLEEP guard in runAlarm().
       display.clearDisplay();
       //display.setTextColor(SSD1306_WHITE);
       //display.invertDisplay(false);
@@ -257,7 +312,7 @@ void runAlarm() {
   // 7:00), muted only by sleep mode — NOT by the `disable`/alarm settings below.
   // This whole block is blocking (delay() calls totalling ~1s per chime), so at
   // 12 o'clock it can tie up loop() for several seconds.
-  if (minute(t) == 0 && second(t) == 0 && (buttonPressCounter % 2) != 1) {
+  if (minute(t) == 0 && second(t) == 0 && currentMode() != MODE_SLEEP) {
     for (int i = 0; i < hr; i++) {
       tone(BUZZER_PIN, highTone, 150);  // c#7
       delay(300);
@@ -364,11 +419,12 @@ void loop() {
   if (reading != buttonState) {
     buttonState = reading;
     if (buttonState == HIGH) {
-      buttonPressCounter++;  // parity of this drives desk-clock vs sleep mode; see updateOledDisplay()
+      buttonPressCounter++;  // steps to the next mode (clock/stocks/sleep); see updateOledDisplay()
       noTone(BUZZER_PIN);          // a touch silences an in-progress alarm
       tone(BUZZER_PIN, 2020, 30);  // short beep to confirm the touch registered
       delay(30);
       webPrint("Button press count: %02d\n", buttonPressCounter);
+      previousTime = 0;  // redraw right away, before any (blocking) stock fetch below
     }
   }
   // end button processing
@@ -377,6 +433,11 @@ void loop() {
     previousTime = millis();
     updateOledDisplay();  // update the physical OLED display
   }
+
+  // Stock mode only: fetch/refresh the index values. Blocks for a few seconds
+  // per fetch (TLS handshake), so it runs after the display update above and
+  // only while the mode is actually selected.
+  handleStocks(currentMode() == MODE_STOCKS);
 #if !defined(ESP32)
   //We don't need to call this explicitly on ESP32 but we do on 8266
   MDNS.update();

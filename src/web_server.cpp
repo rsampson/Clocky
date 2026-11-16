@@ -3,6 +3,7 @@
 #include "clocky.h"
 #include "wifi_manager.h"
 #include "time_manager.h"
+#include "stocks.h"
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
 #include <TimeLib.h>
@@ -33,7 +34,7 @@ static void sendJson(AsyncWebServerRequest *request, JsonDocument &doc) {
 // status, and the debug log tail. Doesn't take any input and never mutates
 // state.
 static void handleStatus(AsyncWebServerRequest *request) {
-  DynamicJsonDocument doc(1536);
+  DynamicJsonDocument doc(1792);
 
   char timeBuf[20];
   time_t t = now();
@@ -49,6 +50,18 @@ static void handleStatus(AsyncWebServerRequest *request) {
   doc["weekday"] = weekday(t);  // 1=Sunday..7=Saturday; used by app.js's describeNextAlarm()
   doc["ssid"] = stored_ssid;
   doc["apMode"] = ap_mode;
+
+  // Stock indexes, only while the values are fresh (the device only fetches
+  // them in stock mode). n = name, p = price, c = previous close.
+  if (stocksFresh()) {
+    JsonArray arr = doc.createNestedArray("stocks");
+    for (int i = 0; i < NUM_STOCKS; i++) {
+      JsonObject o = arr.createNestedObject();
+      o["n"] = stocks[i].label;
+      o["p"] = stocks[i].price;
+      o["c"] = stocks[i].prevClose;
+    }
+  }
 
   fetchDebugText();
   doc["log"] = charBuf;

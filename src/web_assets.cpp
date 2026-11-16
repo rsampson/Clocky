@@ -61,6 +61,11 @@ const char INDEX_HTML[] PROGMEM = R"HTML(<!DOCTYPE html>
       <div class="row"><span class="k">Alarm</span><span id="alarmState">&mdash;</span></div>
     </div>
     <div class="rule"></div>
+    <div id="stocksBox" hidden>
+      <div class="lbl">Markets</div>
+      <div id="stocks" class="rows"></div>
+    </div>
+    <div id="stocksRule" class="rule" hidden></div>
     <div>
       <div class="lblrow"><div class="lbl">Log</div><span class="mono live">live</span></div>
       <pre id="log"></pre>
@@ -464,6 +469,7 @@ const char APP_JS[] PROGMEM = R"JS(
     $('ssid2').textContent = s.ssid || '\u2014';
     $('clockSrc').textContent = s.apMode ? 'Browser (AP mode)' : 'NTP';
     $('log').textContent = s.log;
+    renderStocks(s.stocks);
     $('wifiSsid').placeholder = s.ssid || '';
     if (s.timezoneCode) $('timezone').value = s.timezoneCode;
 
@@ -481,6 +487,31 @@ const char APP_JS[] PROGMEM = R"JS(
     apMode = s.apMode;
     if (apMode) syncBrowserTime();
     haveStatus = true;
+  }
+
+  // Index values are only present while Clocky has fresh data, i.e. while it
+  // is (or recently was) in stock mode; otherwise the section stays hidden.
+  function renderStocks(list) {
+    const have = !!(list && list.length);
+    $('stocksBox').hidden = !have;
+    $('stocksRule').hidden = !have;
+    if (!have) return;
+    const box = $('stocks');
+    box.textContent = '';
+    list.forEach((x) => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const k = document.createElement('span');
+      k.className = 'k';
+      k.textContent = x.n;
+      const v = document.createElement('span');
+      v.className = 'num';
+      const pct = x.c ? ((x.p - x.c) / x.c) * 100 : 0;
+      v.textContent = x.p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+        '  ' + (pct > 0 ? '\u25B2' : pct < 0 ? '\u25BC' : '') + ' ' + Math.abs(pct).toFixed(2) + '%';
+      row.append(k, v);
+      box.appendChild(row);
+    });
   }
 
   function refresh() {

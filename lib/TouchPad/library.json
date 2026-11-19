@@ -1,0 +1,7 @@
+{
+  "name": "TouchPad",
+  "version": "1.0.0",
+  "description": "Two-pin RC-delay touch pad (driver pin -> resistor -> pad <- sensor pin) with median filtering, a self-tracking baseline and hysteresis.",
+  "frameworks": "arduino",
+  "platforms": "*"
+}

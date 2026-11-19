@@ -22,8 +22,11 @@
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);   // SDA connects to D2, SCL  to D1 on the Wemos mini esp8266
 
-bool buttonState;  // debounced touch-pad state: HIGH while the pad is being touched
-//bool lastButtonState = LOW;  // the previous reading from the input pin
+// The capacitive touch pad (the clock's only button). All the measuring,
+// filtering and debouncing lives in lib/TouchPad; see TouchPad.h.
+#include <TouchPad.h>
+TouchPad touchPad(DriverPin, SensorPin);
+
 // Counts touches since boot. Only its value modulo NUM_MODES matters: each
 // touch steps to the next mode, clock -> stocks -> sleep -> clock ...
 // See currentMode() and updateOledDisplay().
@@ -75,9 +78,66 @@ CircularBuffer<float, 24> dayBuffer;
 
 #include <Ticker.h>
 
+#ifdef TOUCH_DIAG
+// Touch diagnostics (build with -D TOUCH_DIAG): every raw reading goes into a
+// ring buffer that GET /api/touchraw?since=<seq> returns as JSON, so
+// tools/touch_watch.py can record the pad over Wi-Fi — the only way to see it
+// on wall power, since a USB cable changes the grounding being investigated.
+struct TouchDiagRec { uint32_t seq, ms, raw, filt; bool touched; };
+static TouchDiagRec touchDiag[128];
+static volatile uint32_t touchDiagSeq = 0;  // seq of the newest record
+
+static void touchDiagHook(uint32_t raw, uint32_t filt, bool touched) {
+  uint32_t seq = touchDiagSeq + 1;
+  touchDiag[seq % 128] = {seq, millis(), raw, filt, touched};
+  touchDiagSeq = seq;
+}
+
+static void handleTouchRaw(AsyncWebServerRequest *request) {
+  uint32_t since = request->hasParam("since") ? request->getParam("since")->value().toInt() : 0;
+  uint32_t newest = touchDiagSeq;
+  if (newest - since > 127) since = newest - 127;  // older ones are overwritten
+  AsyncResponseStream *out = request->beginResponseStream("application/json");
+  out->printf("{\"seq\":%lu,\"base\":%lu,\"presses\":%u,\"nearMisses\":%lu,\"s\":[",
+              (unsigned long)newest, (unsigned long)touchPad.baselineNs(), buttonPressCounter,
+              (unsigned long)touchPad.nearMisses());
+  for (uint32_t q = since + 1; q <= newest; q++) {
+    const TouchDiagRec r = touchDiag[q % 128];
+    if (r.seq != q) continue;  // overwritten while we were reading
+    out->printf("%s[%lu,%lu,%lu,%lu,%d]", q == since + 1 ? "" : ",", (unsigned long)r.seq,
+                (unsigned long)r.ms, (unsigned long)r.raw, (unsigned long)r.filt, r.touched);
+  }
+  out->print("]}");
+  request->send(out);
+}
+#endif
+
+// The pad is read from a 1 ms Ticker rather than from loop(), because loop()
+// blocks for ~2 s at a time (the stock fetch's TLS, the hourly chime). Ticker
+// callbacks still run while those wait on the network or in delay(), so a
+// touch -- or the release between two taps -- during a fetch isn't lost.
+// The callback only counts presses; loop() acts on them (beep, mode change),
+// possibly a moment late.
+static Ticker touchTicker;
+static volatile uint8_t pendingTouches = 0;
+static uint32_t lastTouchMs = 0;  // when loop() last acted on a touch; see handleStocks() call
+
+#ifdef TOUCH_DIAG
+static uint32_t pressSnap[12];  // raw readings (ns) leading up to the latest press
+#endif
+
+static void sampleTouchPad() {
+  if (touchPad.update() && pendingTouches < 255) {
+    pendingTouches++;
+#ifdef TOUCH_DIAG
+    uint32_t seq = touchDiagSeq;
+    for (int i = 0; i < 12; i++) pressSnap[i] = touchDiag[(seq - 11 + i) % 128].raw;
+#endif
+  }
+}
+
 //Function Prototypes
 void runAlarm(void);
-bool readTouch(void);
 
 // String forms of runHour/runMinute, kept around so they can be handed straight
 // to Preferences.putString()/getString() without re-formatting each time.
@@ -97,8 +157,8 @@ void setup() {
   Serial.begin(115200);
 
   pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(DriverPin, OUTPUT);
-  pinMode(SensorPin, INPUT);
+  touchPad.begin();  // also learns the untouched baseline, so keep hands off at boot
+  touchTicker.attach_ms(1, sampleTouchPad);  // update() itself paces readings to sampleMs (3 ms)
   pinMode(ledPin, OUTPUT);
 
   tone(BUZZER_PIN, highTone, 1000);  // audible boot beep
@@ -139,6 +199,10 @@ void setup() {
   Serial.println(F("configuring web server"));
   setUpWebServer();  // starts the AsyncWebServer; see web_server.cpp for routes
 
+#ifdef TOUCH_DIAG
+  touchPad.onSample(touchDiagHook);
+  server.on("/api/touchraw", HTTP_GET, handleTouchRaw);
+#endif
   ElegantOTA.begin(&server);  // adds the /update page to the same web server
   // (No "up at ..." boot message here — the clock hasn't synced yet, so it would
   // just log 00:00:00. The "WiFi up: <ip>" line from wifi_manager.cpp marks the
@@ -166,8 +230,6 @@ void setup() {
   Serial.println(F("We Are Go!"));
 }
 
-unsigned int deltaTime;  // last measured touch-pad RC rise time, in microseconds (see readTouch())
-
 // Sets up font/cursor and fills buf with what the desk clock shows right now.
 // Cycles based on the current second, so day-of-week and date each get one
 // 1-second slot per 5 seconds, while the time itself (the thing you actually
@@ -189,7 +251,6 @@ static void prepClockFace(char *buf) {
       display.setFont(&FreeSans24pt7b);
       display.setCursor(3, 31);
       sprintf(buf, "%2d:%02d", hr, minute());
-      //sprintf(buf, "%3d", deltaTime);  // hack to debug touch switch
       break;
     case 4:  // month + day, e.g. "Aug 22"
       display.setFont(&FreeSans12pt7b);
@@ -306,8 +367,7 @@ void updateOledDisplay(void) {
 // --- Alarm tune ---
 // The settable alarm plays this little tune on a loop until a touch silences
 // it. Notes are stepped by a Ticker (a hardware-timer callback) rather than
-// from loop(), because loop() only comes round every ~200ms (touch sampling)
-// and stalls for seconds at a time (hourly chime, stock fetch) — far too
+// from loop(), because loop() stalls for seconds at a time (hourly chime, stock fetch) — far too
 // uneven to keep a rhythm. freq 0 = a rest.
 struct Note {
   uint16_t freq;  // Hz
@@ -449,39 +509,6 @@ void runAlarm() {
 
 
 
-// There's no capacitive-touch library or dedicated hardware here — this is a
-// homemade RC-delay trick. DriverPin feeds the touch pad through a 300k
-// resistor, and SensorPin reads the pad directly. A finger touching the pad
-// adds body capacitance, which slows how fast the pad's voltage rises when
-// DriverPin switches from low to high. So: pull everything low, then drive
-// high and time (in a tight busy-wait loop, using micros()) how long SensorPin
-// takes to read HIGH. A slow rise (>= treshold, from config.h) means touched.
-bool readTouch(void) {
-  // Discharge the pad fully before timing, so every measurement starts from
-  // the same known (low) voltage.
-  digitalWrite(DriverPin, LOW);
-  pinMode(SensorPin, OUTPUT);
-  digitalWrite(SensorPin, LOW);
-  delay(10);
-
-  // Now drive the pad high through the resistor and time how long SensorPin
-  // takes to follow.
-  digitalWrite(DriverPin, HIGH);
-  pinMode(SensorPin, INPUT);
-  unsigned int bailOutCounter = 0;
-  // Interrupts off while timing: the threshold is only ~10us, and a Wi-Fi/TLS/
-  // Ticker/tone interrupt landing inside this busy-wait stretches the measurement
-  // and reads as a phantom touch (which steps the display mode by itself).
-  noInterrupts();
-  unsigned int timerVal = micros();
-  while (digitalRead(SensorPin) != HIGH && bailOutCounter < 1000) { bailOutCounter++; }  // time how long it takes for the input to follow the output
-  deltaTime = micros() - timerVal;
-  interrupts();
-  if (bailOutCounter == 1000) return (true);  // pin never went high — treat as touched (fail-safe, not fail-silent)
-  //Serial.println(deltaTime);       // debug
-  return (deltaTime >= treshold);   // If it takes longer than the treshold time to go high, declair that the pad is touched
-}
-
 long unsigned previousTime = 0;
 bool initialTimeSynced = false;
 
@@ -512,33 +539,46 @@ void loop() {
     setTime(getNtpTime());
   }
 
-  // Touch-pad debouncing: readTouch() is a noisy analog-ish measurement, so
-  // instead of trusting one reading, sample it 10 times (100ms total) and go
-  // with whichever result was seen more than half the time (majority vote).
-  uint16_t trueSum = 0;
-  for (int i = 0; i < 10; i++) {
-    if (readTouch() == true) trueSum++;
-    delay(10);
+  // Each touch steps to the next display mode and silences a ringing alarm.
+  // (Counted by sampleTouchPad() on the touchTicker.)
+  while (pendingTouches > 0) {
+    noInterrupts();
+    pendingTouches--;
+    interrupts();
+    lastTouchMs = millis();
+    buttonPressCounter++;        // steps to the next mode (clock/stocks/sleep); see updateOledDisplay()
+    stopAlarmTune();             // a touch silences an in-progress alarm
+    tone(BUZZER_PIN, 2020, 30);  // short beep to confirm the touch registered
+    webPrint("Touch #%u: %luns (baseline %luns)\n", buttonPressCounter,
+             (unsigned long)touchPad.readingNs(), (unsigned long)touchPad.baselineNs());
+    previousTime = 0;  // redraw right away, before any (blocking) stock fetch below
+#ifdef TOUCH_DIAG
+    webPrint("  raw before press (us): %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu\n",
+             pressSnap[0] / 1000, pressSnap[1] / 1000, pressSnap[2] / 1000, pressSnap[3] / 1000,
+             pressSnap[4] / 1000, pressSnap[5] / 1000, pressSnap[6] / 1000, pressSnap[7] / 1000,
+             pressSnap[8] / 1000, pressSnap[9] / 1000, pressSnap[10] / 1000, pressSnap[11] / 1000);
+    webPrint("  at %lus uptime, WiFi status %d\n", millis() / 1000, (int)WiFi.status());
+#endif
   }
-  // Hysteresis: a press needs a near-unanimous vote (>=9/10); once pressed it
-  // is held until the vote drops to <=3/10. Brief noise bursts can't toggle it.
-  bool reading = buttonState ? (trueSum > 3) : (trueSum >= 9);
-
-  // Edge-triggered: only act when the debounced state actually changes, and
-  // only count/beep on the LOW->HIGH transition (the moment of touching),
-  // not on release.
-  if (reading != buttonState) {
-    buttonState = reading;
-    if (buttonState == HIGH) {
-      buttonPressCounter++;  // steps to the next mode (clock/stocks/sleep); see updateOledDisplay()
-      stopAlarmTune();             // a touch silences an in-progress alarm
-      tone(BUZZER_PIN, 2020, 30);  // short beep to confirm the touch registered
-      delay(30);
-      webPrint("Button press count: %02d (touch votes %u/10, last rise %uus)\n", buttonPressCounter, trueSum, deltaTime);
-      previousTime = 0;  // redraw right away, before any (blocking) stock fetch below
-    }
+  // Log rises that didn't make it to a press, to show if the pad is set too
+  // insensitive. At most once a minute: Wi-Fi bursts at boot and a hovering
+  // hand produce several, and the dashboard log is short.
+  static uint32_t loggedNearMisses = 0;
+  static uint32_t lastNearMissLogMs = 0;
+  if (touchPad.nearMisses() != loggedNearMisses &&
+      (lastNearMissLogMs == 0 || millis() - lastNearMissLogMs >= 60000)) {
+    webPrint("Touch near-misses: %lu since last report, latest peak %luns (baseline %luns)\n",
+             (unsigned long)(touchPad.nearMisses() - loggedNearMisses),
+             (unsigned long)touchPad.lastNearMissNs(), (unsigned long)touchPad.baselineNs());
+    loggedNearMisses = touchPad.nearMisses();
+    lastNearMissLogMs = millis() | 1;
   }
-  // end button processing
+  // A stuck pad reads as "never touched"; log when that starts and stops.
+  static bool padStuck = false;
+  if (touchPad.stuck() != padStuck) {
+    padStuck = touchPad.stuck();
+    webPrint(padStuck ? "Touch pad not responding (check wiring)\n" : "Touch pad responding again\n");
+  }
 
   if (millis() > previousTime + 500) {  // update display twice per second
     previousTime = millis();
@@ -547,8 +587,11 @@ void loop() {
 
   // Stock mode only: fetch/refresh the index values. Blocks for a few seconds
   // per fetch (TLS handshake), so it runs after the display update above and
-  // only while the mode is actually selected.
-  handleStocks(currentMode() == MODE_STOCKS);
+  // only while the mode is actually selected. It also waits until the pad has
+  // been untouched for 3 s: the handshake has ~0.5 s stretches where even the
+  // touch Ticker can't run, long enough to swallow a whole tap, so don't start
+  // one while someone is tapping through the modes.
+  handleStocks(currentMode() == MODE_STOCKS && millis() - lastTouchMs >= 3000);
 #if !defined(ESP32)
   //We don't need to call this explicitly on ESP32 but we do on 8266
   MDNS.update();

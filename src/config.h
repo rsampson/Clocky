@@ -23,5 +23,5 @@ const int highTone = 2217;  // tones for hour chime
 const int lowTone = 1975;
 
 // --- Touch sensor ---
-const int treshold = 10;  // minimum micro sec delay caused by body capacity
-                          // change to control touch switch sensitivity (lower = more sensitive)
+// Sensitivity and filtering are TouchPad::Config defaults (lib/TouchPad), set
+// from measurements of this pad. Re-tune with tools/touch_tuner.

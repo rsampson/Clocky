@@ -5,3 +5,6 @@
 .vscode/ipch
 compile_commands.json
 src/build/
+
+# Touch-pad test recordings (tools/touch_capture.py, tools/touch_watch.py); kept locally
+tools/captures/

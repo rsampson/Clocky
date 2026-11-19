@@ -16,6 +16,7 @@
 #include <Fonts/FreeSans24pt7b.h>
 #include <Fonts/FreeSans18pt7b.h>
 #include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
 #include <Arduino.h>
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
@@ -198,34 +199,37 @@ static void prepClockFace(char *buf) {
   }
 }
 
-// Stock mode's face: each index gets 3 seconds — its name for 1 second, then
-// its value for 2 — so the three indexes rotate every 9 seconds, in the same
-// spirit as the clock's day/time/date rotation. Values are rounded to whole
-// points (5 digits is all that fits at this font size) with a small
-// up/down triangle at the right showing direction versus the previous close.
+// Stock mode's face: each index gets 3 seconds, showing its value and a
+// one-letter name together (e.g. "34567 D", "5123 S", "23456 N") so there's no
+// separate name screen to wait through. The three indexes rotate every 9
+// seconds. Values are rounded to whole points, with a small up/down triangle
+// at the right showing direction versus the previous close.
 static void prepStockFace(char *buf) {
   unsigned int slot = now() % (NUM_STOCKS * 3);
   const StockIndex &s = stocks[slot / 3];
-  bool showValue = (slot % 3) != 0;
 
-  if (showValue) {
-    sprintf(buf, "%ld", lroundf(s.price));
-  } else {
-    sprintf(buf, "%s", s.label);
-  }
+  // The value is drawn by the caller from buf (12pt); the one-letter name is
+  // drawn here in a smaller font (9pt) right after it.
+  sprintf(buf, "%ld", lroundf(s.price));
+  char tag[2] = { s.label[0], 0 };
 
-  // Centre the text in the space left of the triangle (value) or on the
-  // whole screen (name).
-  const int arrowW = 12;
-  int avail = showValue ? SCREEN_WIDTH - arrowW - 2 : SCREEN_WIDTH;
-  int16_t x1, y1;
-  uint16_t w, h;
-  display.setFont(&FreeSans18pt7b);
-  display.getTextBounds(buf, 0, 28, &x1, &y1, &w, &h);
-  int x = (avail - (int)w) / 2 - x1;
-  display.setCursor(x < 0 ? 0 : x, 28);
+  // Centre value + gap + letter in the space left of the triangle.
+  const int arrowW = 12, gap = 5;
+  int avail = SCREEN_WIDTH - arrowW - 2;
+  int16_t x1, y1, tx1, ty1;
+  uint16_t w, h, tw, th;
+  display.setFont(&FreeSans12pt7b);
+  display.getTextBounds(buf, 0, 25, &x1, &y1, &w, &h);
+  display.setFont(&FreeSans9pt7b);
+  display.getTextBounds(tag, 0, 25, &tx1, &ty1, &tw, &th);
+  int x = (avail - ((int)w + gap + (int)tw)) / 2 - x1;
+  if (x < 0) x = 0;
+  display.setCursor(x + (int)w + gap, 25);
+  display.print(tag);
+  display.setFont(&FreeSans12pt7b);
+  display.setCursor(x, 25);
 
-  if (showValue && s.price != s.prevClose) {
+  if (s.price != s.prevClose) {
     int ax = SCREEN_WIDTH - arrowW;  // left edge of the triangle
     if (s.price > s.prevClose) {
       display.fillTriangle(ax, 22, ax + arrowW - 1, 22, ax + arrowW / 2, 10, SSD1306_WHITE);  // up

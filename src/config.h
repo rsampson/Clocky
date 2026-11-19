@@ -14,6 +14,8 @@
 
 // --- Pins ---
 const int BUZZER_PIN = D6;
+const int BUZZER_PIN_N = D5;  // GPIO14: complement of BUZZER_PIN, for differential piezo drive
+                              // (piezo between D6 and D5 instead of D6 and GND; ESP8266 only)
 const int SensorPin = D7;  // this input connects directly to the touch pad
 const int DriverPin = D3;  // this output connects to the touch pad through a 300k resistor
 const int ledPin = D4;

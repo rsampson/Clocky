@@ -136,6 +136,47 @@ static void sampleTouchPad() {
   }
 }
 
+#if !defined(ESP32)
+#include <core_esp8266_waveform.h>  // startWaveformClockCycles(), stopWaveform()
+#endif
+
+// --- Piezo beeper: differential drive ---
+// The piezo sits between BUZZER_PIN (D6) and BUZZER_PIN_N (D5), and D5 always
+// carries the complement of D6, so the piezo sees +/-3.3 V (6.6 V peak to
+// peak) instead of 0..3.3 V: about 6 dB louder, with no extra parts. A piezo
+// still wired from D6 to GND works exactly as before (D5 just toggles unused).
+// The core's waveform generator does this: D5 is started locked to D6 half a
+// period later. That needs its phase-locked mode (enablePhaseLockedWaveform()
+// in setup()); the default PWM-locked generator ignores phase alignment and
+// would leave the two pins at an arbitrary, possibly cancelling, phase.
+// ESP32 builds keep plain single-ended tone() on BUZZER_PIN.
+static void buzzerOff() {
+  noTone(BUZZER_PIN);
+#if !defined(ESP32)
+  noTone(BUZZER_PIN_N);
+#endif
+}
+
+static void buzzerTone(unsigned int freq, unsigned long ms) {
+#if defined(ESP32)
+  tone(BUZZER_PIN, freq, ms);
+#else
+  if (freq == 0) {
+    buzzerOff();
+    return;
+  }
+  const uint32_t period = microsecondsToClockCycles(1000000UL) / freq;
+  const uint32_t high = period / 2;
+  const uint32_t low = period - high;
+  uint32_t run = microsecondsToClockCycles(ms * 1000UL);  // rounded up to whole periods, as tone() does
+  run += period - 1;
+  run -= run % period;
+  stopWaveform(BUZZER_PIN_N);  // only a freshly started waveform is phase-aligned
+  startWaveformClockCycles(BUZZER_PIN, high, low, run);                        // changes on the fly if already running
+  startWaveformClockCycles(BUZZER_PIN_N, high, low, run, BUZZER_PIN, high);   // rises as D6 falls
+#endif
+}
+
 //Function Prototypes
 void runAlarm(void);
 
@@ -156,12 +197,17 @@ void setup() {
 
   Serial.begin(115200);
 
+#if !defined(ESP32)
+  enablePhaseLockedWaveform();  // needed for the complementary buzzer drive; see buzzerTone()
+  pinMode(BUZZER_PIN_N, OUTPUT);
+  digitalWrite(BUZZER_PIN_N, LOW);
+#endif
   pinMode(BUZZER_PIN, OUTPUT);
   touchPad.begin();  // also learns the untouched baseline, so keep hands off at boot
   touchTicker.attach_ms(1, sampleTouchPad);  // update() itself paces readings to sampleMs (3 ms)
   pinMode(ledPin, OUTPUT);
 
-  tone(BUZZER_PIN, highTone, 1000);  // audible boot beep
+  buzzerTone(highTone, 1000);  // audible boot beep
 
   // Preferences is the NVS-backed key/value store (not EEPROM.h) used for every
   // setting the web UI can change: Wi-Fi credentials, time zone, alarm schedule.
@@ -441,9 +487,9 @@ static void playNextAlarmNote() {
   alarmNoteIdx = (alarmNoteIdx + 1) % ALARM_TUNE_LEN;
   uint32_t ms = (uint32_t)n.beats * ALARM_BEAT_MS;
   if (n.freq) {
-    tone(BUZZER_PIN, n.freq, ms - 25);  // stop a touch early so repeated notes stay distinct
+    buzzerTone(n.freq, ms - 25);  // stop a touch early so repeated notes stay distinct
   } else {
-    noTone(BUZZER_PIN);
+    buzzerOff();
   }
   alarmTicker.once_ms(ms, playNextAlarmNote);
 }
@@ -457,7 +503,7 @@ static void startAlarmTune() {
 static void stopAlarmTune() {
   alarmRinging = false;
   alarmTicker.detach();
-  noTone(BUZZER_PIN);
+  buzzerOff();
 }
 
 // Called every loop() iteration. Handles two independent things: the hourly
@@ -478,11 +524,11 @@ void runAlarm() {
   // 12 o'clock it can tie up loop() for several seconds.
   if (minute(t) == 0 && second(t) == 0 && currentMode() != MODE_SLEEP && !alarmRinging) {
     for (int i = 0; i < hr; i++) {
-      tone(BUZZER_PIN, highTone, 150);  // c#7
+      buzzerTone(highTone, 150);  // c#7
       delay(300);
-      tone(BUZZER_PIN, lowTone, 250);  // b6
+      buzzerTone(lowTone, 250);  // b6
       delay(700);
-      noTone(BUZZER_PIN);
+      buzzerOff();
     }
     delay(400);  // prevent reentrance: keeps this from re-triggering within the same second
   }
@@ -548,7 +594,7 @@ void loop() {
     lastTouchMs = millis();
     buttonPressCounter++;        // steps to the next mode (clock/stocks/sleep); see updateOledDisplay()
     stopAlarmTune();             // a touch silences an in-progress alarm
-    tone(BUZZER_PIN, 2020, 30);  // short beep to confirm the touch registered
+    buzzerTone(2020, 30);  // short beep to confirm the touch registered
     webPrint("Touch #%u: %luns (baseline %luns)\n", buttonPressCounter,
              (unsigned long)touchPad.readingNs(), (unsigned long)touchPad.baselineNs());
     previousTime = 0;  // redraw right away, before any (blocking) stock fetch below

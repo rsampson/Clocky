@@ -29,12 +29,14 @@ A simple desk clock for the ESP8266 / ESP32 with a web interface for configurati
 
 | Component        | Pin |
 |-------------------|-----|
-| Piezo beeper       | D6  |
+| Piezo beeper       | D6 and D5 (piezo connected between them, not to GND) |
 | Touch pad sensor   | D7  |
 | Touch pad driver   | D3 (through a 300k resistor) |
 | Status LED         | D4  |
 
 The touch pad is the only input for switching the clock between desk clock, stock-index, and sleep modes, so it is not optional. It works by wiring the conductor directly to input pin D7, and also to output pin D3 through a 300k resistor. Touching the pad adds body capacitance to the circuit, which slows the signal from the driver pin to the sensor pin — this delay is what the firmware detects to register a touch.
+
+The piezo is driven differentially on ESP8266: D5 always carries the inverse of D6, so connecting the piezo between D6 and D5 gives it twice the voltage swing (6.6 V peak to peak instead of 3.3 V), which makes it noticeably louder with no extra parts. A piezo wired from D6 to GND still works, just at the original volume. (ESP32 builds drive D6 only.)
 
 Pin assignments and other hardware constants can be changed in [`src/config.h`](src/config.h).
 

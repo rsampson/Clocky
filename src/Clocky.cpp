@@ -465,10 +465,15 @@ bool readTouch(void) {
   digitalWrite(DriverPin, HIGH);
   pinMode(SensorPin, INPUT);
   unsigned int bailOutCounter = 0;
+  // Interrupts off while timing: the threshold is only ~10us, and a Wi-Fi/TLS/
+  // Ticker/tone interrupt landing inside this busy-wait stretches the measurement
+  // and reads as a phantom touch (which steps the display mode by itself).
+  noInterrupts();
   unsigned int timerVal = micros();
   while (digitalRead(SensorPin) != HIGH && bailOutCounter < 1000) { bailOutCounter++; }  // time how long it takes for the input to follow the output
-  if (bailOutCounter == 1000) return (true);  // pin never went high — treat as touched (fail-safe, not fail-silent)
   deltaTime = micros() - timerVal;
+  interrupts();
+  if (bailOutCounter == 1000) return (true);  // pin never went high — treat as touched (fail-safe, not fail-silent)
   //Serial.println(deltaTime);       // debug
   return (deltaTime >= treshold);   // If it takes longer than the treshold time to go high, declair that the pad is touched
 }
@@ -511,7 +516,9 @@ void loop() {
     if (readTouch() == true) trueSum++;
     delay(10);
   }
-  bool reading = (trueSum > 6 ? HIGH : LOW);
+  // Hysteresis: a press needs a near-unanimous vote (>=9/10); once pressed it
+  // is held until the vote drops to <=3/10. Brief noise bursts can't toggle it.
+  bool reading = buttonState ? (trueSum > 3) : (trueSum >= 9);
 
   // Edge-triggered: only act when the debounced state actually changes, and
   // only count/beep on the LOW->HIGH transition (the moment of touching),
@@ -523,7 +530,7 @@ void loop() {
       stopAlarmTune();             // a touch silences an in-progress alarm
       tone(BUZZER_PIN, 2020, 30);  // short beep to confirm the touch registered
       delay(30);
-      webPrint("Button press count: %02d\n", buttonPressCounter);
+      webPrint("Button press count: %02d (touch votes %u/10, last rise %uus)\n", buttonPressCounter, trueSum, deltaTime);
       previousTime = 0;  // redraw right away, before any (blocking) stock fetch below
     }
   }

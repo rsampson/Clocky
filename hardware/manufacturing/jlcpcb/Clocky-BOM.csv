@@ -1,0 +1,7 @@
+"Designator","Value","Footprint","Qty","Description"
+"BZ1","Piezo (differential, D6/D5)","Buzzer_Beeper:Buzzer_12x9.5RM7.6","1","Buzzer, polarized"
+"J1","OLED SSD1306 128x32 I2C (GND VCC SCL SDA)","Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical","1","Generic connector, single row, 01x04, script generated (kicad-library-utils/schlib/autogen/connector/)"
+"R1","300k","Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal","1","Resistor"
+"R3","10k","Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal","1","Resistor"
+"TP1","Touch pad","TestPoint:TestPoint_Pad_D4.0mm","1","test point"
+"U1","WEMOS D1 mini","RF_Module:WEMOS_D1_mini_light","1","32-bit microcontroller module with WiFi"

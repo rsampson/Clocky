@@ -8,3 +8,12 @@ src/build/
 
 # Touch-pad test recordings (tools/touch_capture.py, tools/touch_watch.py); kept locally
 tools/captures/
+
+# KiCad per-user/local files (hardware/)
+*.kicad_prl
+*.lck
+*-backups/
+fp-info-cache
+_autosave-*
+.history/
+hardware/log.txt

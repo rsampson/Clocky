@@ -2650,7 +2650,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "Piezo (differential, D6/D5)"
+		(property "Value" "Piezo 16mm (differential, D6/D5)"
 			(at 179.07 101.6 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2661,7 +2661,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Buzzer_Beeper:Buzzer_12x9.5RM7.6"
+		(property "Footprint" "Clocky:Buzzer_D16mm_P8mm"
 			(at 175.26 100.33 0)
 			(hide yes)
 			(show_name no)

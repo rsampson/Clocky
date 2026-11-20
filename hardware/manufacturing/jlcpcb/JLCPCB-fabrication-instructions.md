@@ -1,4 +1,6 @@
-# Clocky PCB — JLCPCB Fabrication Instructions
+# Clocky PCB — JLCPCB Fabrication Instructions (rev v1.1)
+
+**Rev v1.1** (supersedes v1.0): board lengthened from 100 to 110 mm for a 16 mm piezo (8 mm pin pitch) beside the 27 mm OLED module, and a 25 mm touch plate.
 
 Bare PCB fabrication only. No assembly, and no stencil: every part is
 through-hole except the touch plate, and all of it is hand-soldered.
@@ -25,7 +27,7 @@ through-hole except the touch plate, and all of it is hand-soldered.
 |---|---|
 | Base material | FR-4 |
 | Layers | 2 |
-| Dimensions | 100 × 35 mm |
+| Dimensions | 110 × 35 mm |
 | PCB quantity | 5 (minimum) |
 | Product type | Industrial/Consumer electronics |
 | Different design | 1 |
@@ -49,7 +51,7 @@ through-hole except the touch plate, and all of it is hand-soldered.
 
 | Parameter | Design value | JLCPCB 2-layer minimum |
 |---|---|---|
-| Board size | 100 × 35 mm, rectangular, sharp corners | 6 × 6 mm |
+| Board size | 110 × 35 mm, rectangular, sharp corners | 6 × 6 mm |
 | Narrowest track | 0.8 mm (power tracks 1.2 mm) | 0.127 mm |
 | Smallest copper clearance | 0.25 mm (ground pour 0.3 mm) | 0.127 mm |
 | Copper to board edge | ≥ 0.5 mm | 0.3 mm |
@@ -89,7 +91,7 @@ Paste this in if the order form offers a remark or notes field:
 
 ## Before you pay
 
-- [ ] JLCPCB's Gerber viewer shows the board at 100 × 35 mm, with both copper layers, both masks and the top silkscreen.
+- [ ] JLCPCB's Gerber viewer shows the board at 110 × 35 mm, with both copper layers, both masks and the top silkscreen.
 - [ ] The touch plate shows as copper **under** mask, with only the 4 mm round opening.
 - [ ] The drill view shows 26 plated holes and no non-plated holes.
 - [ ] Mark on PCB is set to "Remove mark".

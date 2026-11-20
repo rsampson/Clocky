@@ -5,4 +5,5 @@
   (lib (name "Resistor_THT") (type "KiCad") (uri "/usr/share/kicad/footprints/Resistor_THT.pretty") (options "") (descr ""))
   (lib (name "Buzzer_Beeper") (type "KiCad") (uri "/usr/share/kicad/footprints/Buzzer_Beeper.pretty") (options "") (descr ""))
   (lib (name "Connector_PinHeader_2.54mm") (type "KiCad") (uri "/usr/share/kicad/footprints/Connector_PinHeader_2.54mm.pretty") (options "") (descr ""))
-  (lib (name "TestPoint") (type "KiCad") (uri "/usr/share/kicad/footprints/TestPoint.pretty") (options "") (descr "")))
+  (lib (name "TestPoint") (type "KiCad") (uri "/usr/share/kicad/footprints/TestPoint.pretty") (options "") (descr ""))
+  (lib (name "Clocky") (type "KiCad") (uri "${KIPRJMOD}/Clocky.pretty") (options "") (descr "")))

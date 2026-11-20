@@ -20,9 +20,14 @@ const int SensorPin = D7;  // this input connects directly to the touch pad
 const int DriverPin = D3;  // this output connects to the touch pad through a 300k resistor
 const int ledPin = D4;
 
-// --- Alarm tones ---
-const int highTone = 2217;  // tones for hour chime
-const int lowTone = 1975;
+// --- Beeper tones ---
+// The piezo only responds over about one octave; every tone and alarm-tune
+// note must stay inside it (checked at compile time in Clocky.cpp).
+const int BEEPER_MIN_HZ = 1500;
+const int BEEPER_MAX_HZ = 3000;
+const int highTone = 2217;     // hourly chime, C#7 (also the boot beep)
+const int lowTone = 1975;      // hourly chime, B6
+const int touchBlipHz = 2020;  // short blip confirming a touch
 
 // --- Touch sensor ---
 // Sensitivity and filtering are TouchPad::Config defaults (lib/TouchPad), set

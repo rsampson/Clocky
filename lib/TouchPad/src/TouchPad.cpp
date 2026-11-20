@@ -85,7 +85,9 @@ uint32_t IRAM_ATTR TouchPad::measureNs() {
   interrupts();
 
   if (elapsed > limit) return 0;
-  return (uint64_t)elapsed * 1000 / ticksPerUs();
+  // 32-bit and overflow-safe for any timeout: whole microseconds, then the remainder.
+  const uint32_t tpu = ticksPerUs();
+  return (elapsed / tpu) * 1000 + (elapsed % tpu) * 1000 / tpu;
 }
 
 // Median of the readings in the window.
@@ -128,6 +130,8 @@ bool TouchPad::decide(uint32_t raw, uint32_t now) {
     _touched = false;
     _aboveRun = 0;
     _filteredNs = 0;
+    _highSinceMs = 0;  // a stuck spell must not count towards a baseline re-learn
+    _peakNs = 0;
     return false;
   }
 
@@ -135,20 +139,21 @@ bool TouchPad::decide(uint32_t raw, uint32_t now) {
   _filteredNs = r;
 
   // No baseline yet (pad wasn't responding at begin()): learn it now.
-  if (_baselineNs == 0) {
+  if (_baselineQ8 == 0) {
     if (r != windowValue(0)) setBaseline(r);  // not while the window is mostly timeouts
     return false;
   }
 
-  const uint32_t pressAt = _baselineNs + _baselineNs * _cfg.pressPercent / 100;
-  const uint32_t releaseAt = _baselineNs + _baselineNs * _cfg.releasePercent / 100;
+  const uint32_t base = baselineNs();
+  const uint32_t pressAt = base + base * _cfg.pressPercent / 100;
+  const uint32_t releaseAt = base + base * _cfg.releasePercent / 100;
 
   // Raised for too long to be a finger: re-learn the baseline from here.
   if (r < releaseAt) {
     _highSinceMs = 0;
   } else if (_highSinceMs == 0) {
     _highSinceMs = now | 1;  // never 0 while armed
-  } else if (now - _highSinceMs >= _cfg.relearnMs) {
+  } else if (now - _highSinceMs >= _cfg.relearnMs && r != windowValue(0)) {  // never onto a timeout
     setBaseline(r);
     _touched = false;
     _aboveRun = 0;
@@ -180,7 +185,7 @@ bool TouchPad::decide(uint32_t raw, uint32_t now) {
     if (r > _peakNs) _peakNs = r;
     return false;
   }
-  if (_peakNs > _baselineNs + _baselineNs * _cfg.pressPercent / 200) {
+  if (_peakNs > base + base * _cfg.pressPercent / 200) {
     _nearMisses++;
     _lastNearMissNs = _peakNs;
   }
@@ -195,6 +200,5 @@ bool TouchPad::decide(uint32_t raw, uint32_t now) {
   const uint32_t rq = r << 8;
   if (rq < _baselineQ8) _baselineQ8 -= (_baselineQ8 - rq) >> 4;
   else _baselineQ8 += (rq - _baselineQ8) >> _cfg.baselineShift;
-  _baselineNs = _baselineQ8 >> 8;
   return false;
 }

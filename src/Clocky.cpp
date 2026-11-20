@@ -22,10 +22,9 @@
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);   // SDA connects to D2, SCL  to D1 on the Wemos mini esp8266
 
-// The capacitive touch pad (the clock's only button). All the measuring,
-// filtering and debouncing lives in lib/TouchPad; see TouchPad.h.
-#include <TouchPad.h>
-TouchPad touchPad(DriverPin, SensorPin);
+// The capacitive touch pad (the clock's only button): see touch_input.h and
+// lib/TouchPad.
+#include "touch_input.h"
 
 // Counts touches since boot. Only its value modulo NUM_MODES matters: each
 // touch steps to the next mode, clock -> stocks -> sleep -> clock ...
@@ -77,64 +76,6 @@ CircularBuffer<float, 24> dayBuffer;
 #include "stocks.h"
 
 #include <Ticker.h>
-
-#ifdef TOUCH_DIAG
-// Touch diagnostics (build with -D TOUCH_DIAG): every raw reading goes into a
-// ring buffer that GET /api/touchraw?since=<seq> returns as JSON, so
-// tools/touch_watch.py can record the pad over Wi-Fi — the only way to see it
-// on wall power, since a USB cable changes the grounding being investigated.
-struct TouchDiagRec { uint32_t seq, ms, raw, filt; bool touched; };
-static TouchDiagRec touchDiag[128];
-static volatile uint32_t touchDiagSeq = 0;  // seq of the newest record
-
-static void touchDiagHook(uint32_t raw, uint32_t filt, bool touched) {
-  uint32_t seq = touchDiagSeq + 1;
-  touchDiag[seq % 128] = {seq, millis(), raw, filt, touched};
-  touchDiagSeq = seq;
-}
-
-static void handleTouchRaw(AsyncWebServerRequest *request) {
-  uint32_t since = request->hasParam("since") ? request->getParam("since")->value().toInt() : 0;
-  uint32_t newest = touchDiagSeq;
-  if (newest - since > 127) since = newest - 127;  // older ones are overwritten
-  AsyncResponseStream *out = request->beginResponseStream("application/json");
-  out->printf("{\"seq\":%lu,\"base\":%lu,\"presses\":%u,\"nearMisses\":%lu,\"s\":[",
-              (unsigned long)newest, (unsigned long)touchPad.baselineNs(), buttonPressCounter,
-              (unsigned long)touchPad.nearMisses());
-  for (uint32_t q = since + 1; q <= newest; q++) {
-    const TouchDiagRec r = touchDiag[q % 128];
-    if (r.seq != q) continue;  // overwritten while we were reading
-    out->printf("%s[%lu,%lu,%lu,%lu,%d]", q == since + 1 ? "" : ",", (unsigned long)r.seq,
-                (unsigned long)r.ms, (unsigned long)r.raw, (unsigned long)r.filt, r.touched);
-  }
-  out->print("]}");
-  request->send(out);
-}
-#endif
-
-// The pad is read from a 1 ms Ticker rather than from loop(), because loop()
-// blocks for ~2 s at a time (the stock fetch's TLS, the hourly chime). Ticker
-// callbacks still run while those wait on the network or in delay(), so a
-// touch -- or the release between two taps -- during a fetch isn't lost.
-// The callback only counts presses; loop() acts on them (beep, mode change),
-// possibly a moment late.
-static Ticker touchTicker;
-static volatile uint8_t pendingTouches = 0;
-static uint32_t lastTouchMs = 0;  // when loop() last acted on a touch; see handleStocks() call
-
-#ifdef TOUCH_DIAG
-static uint32_t pressSnap[12];  // raw readings (ns) leading up to the latest press
-#endif
-
-static void sampleTouchPad() {
-  if (touchPad.update() && pendingTouches < 255) {
-    pendingTouches++;
-#ifdef TOUCH_DIAG
-    uint32_t seq = touchDiagSeq;
-    for (int i = 0; i < 12; i++) pressSnap[i] = touchDiag[(seq - 11 + i) % 128].raw;
-#endif
-  }
-}
 
 #if !defined(ESP32)
 #include <core_esp8266_waveform.h>  // startWaveformClockCycles(), stopWaveform()
@@ -203,8 +144,7 @@ void setup() {
   digitalWrite(BUZZER_PIN_N, LOW);
 #endif
   pinMode(BUZZER_PIN, OUTPUT);
-  touchPad.begin();  // also learns the untouched baseline, so keep hands off at boot
-  touchTicker.attach_ms(1, sampleTouchPad);  // update() itself paces readings to sampleMs (3 ms)
+  touchInputBegin();  // also learns the untouched baseline, so keep hands off at boot
   pinMode(ledPin, OUTPUT);
 
   buzzerTone(highTone, 1000);  // audible boot beep
@@ -245,10 +185,7 @@ void setup() {
   Serial.println(F("configuring web server"));
   setUpWebServer();  // starts the AsyncWebServer; see web_server.cpp for routes
 
-#ifdef TOUCH_DIAG
-  touchPad.onSample(touchDiagHook);
-  server.on("/api/touchraw", HTTP_GET, handleTouchRaw);
-#endif
+  touchInputAddRoutes(server);  // TOUCH_DIAG builds only
   ElegantOTA.begin(&server);  // adds the /update page to the same web server
   // (No "up at ..." boot message here — the clock hasn't synced yet, so it would
   // just log 00:00:00. The "WiFi up: <ip>" line from wifi_manager.cpp marks the
@@ -315,9 +252,9 @@ static void prepStockFace(char *buf) {
   unsigned int slot = now() % (NUM_STOCKS * 3);
   const StockIndex &s = stocks[slot / 3];
 
-  // The value is drawn by the caller from buf (12pt); the one-letter name is
-  // drawn here in a smaller font (9pt) right after it.
-  sprintf(buf, "%ld", lroundf(s.price));
+  // Draws the whole face itself: value in 12pt, one-letter name in 9pt.
+  char value[12];
+  sprintf(value, "%ld", lroundf(s.price));
   char tag[2] = { s.label[0], 0 };
 
   // Centre value + gap + letter in the space left of the triangle.
@@ -326,7 +263,7 @@ static void prepStockFace(char *buf) {
   int16_t x1, y1, tx1, ty1;
   uint16_t w, h, tw, th;
   display.setFont(&FreeSans12pt7b);
-  display.getTextBounds(buf, 0, 25, &x1, &y1, &w, &h);
+  display.getTextBounds(value, 0, 25, &x1, &y1, &w, &h);
   display.setFont(&FreeSans9pt7b);
   display.getTextBounds(tag, 0, 25, &tx1, &ty1, &tw, &th);
   int x = (avail - ((int)w + gap + (int)tw)) / 2 - x1;
@@ -335,6 +272,8 @@ static void prepStockFace(char *buf) {
   display.print(tag);
   display.setFont(&FreeSans12pt7b);
   display.setCursor(x, 25);
+  display.print(value);
+  buf[0] = '\0';  // nothing left for updateOledDisplay() to print
 
   if (s.price != s.prevClose) {
     int ax = SCREEN_WIDTH - arrowW;  // left edge of the triangle
@@ -374,17 +313,13 @@ void updateOledDisplay(void) {
 
   switch (currentMode()) {
     case MODE_CLOCK:               // desk-clock mode (the default at boot)
-      digitalWrite(ledPin, LOW);  // turn on the night lite
-      display.stopscroll();
-      prepClockFace(buf);
-      break;
     case MODE_STOCKS:              // stock-index mode: Dow / S&P 500 / Nasdaq
       digitalWrite(ledPin, LOW);  // turn on the night lite
       display.stopscroll();
-      // No fresh data (still fetching, WiFi down, fetch failed, data gone
-      // stale): behave exactly like the desk clock until handleStocks() in
-      // loop() gets good values.
-      if (stocksFresh()) {
+      // Stock mode without fresh data (still fetching, WiFi down, fetch
+      // failed, data gone stale) behaves exactly like the desk clock until
+      // handleStocks() in loop() gets good values.
+      if (currentMode() == MODE_STOCKS && stocksFresh()) {
         prepStockFace(buf);
       } else {
         prepClockFace(buf);
@@ -429,52 +364,67 @@ struct Note {
 #define ALARM_TUNE 1
 #endif
 
-// Note frequencies (equal temperament; S = sharp). Both tunes are pitched to
-// sit at or below ~3 kHz, where the piezo buzzer resonates.
+// Note frequencies (equal temperament; S = sharp): exactly the one octave the
+// piezo responds to, BEEPER_MIN_HZ..BEEPER_MAX_HZ (1500-3000 Hz) in config.h.
+// A tune wider than an octave can't simply be transposed into it, so each tune
+// is transposed to the key that needs the fewest octave jumps, then any note
+// still outside is moved by an octave.
 enum : uint16_t {
-  N_G5 = 784, N_A5 = 880, N_B5 = 988, N_C6 = 1047, N_CS6 = 1109, N_D6 = 1175, N_E6 = 1319, N_FS6 = 1480,
-  N_G6 = 1568, N_A6 = 1760, N_B6 = 1976, N_C7 = 2093, N_D7 = 2349, N_E7 = 2637, N_FS7 = 2960, N_G7 = 3136
+  N_G6 = 1568, N_GS6 = 1661, N_A6 = 1760, N_AS6 = 1865, N_B6 = 1976, N_C7 = 2093,
+  N_CS7 = 2217, N_D7 = 2349, N_DS7 = 2489, N_E7 = 2637, N_F7 = 2794, N_FS7 = 2960
 };
 
 #if ALARM_TUNE == 1
-// The Sailor's Hornpipe, in G, two octaves above written pitch. One table row
-// per bar; a beat is an eighth note. Both 8-bar parts are played once each
+// The Sailor's Hornpipe, transposed from G up to C# (the key that needs the
+// fewest octave jumps: 16 of 107 intervals change). One table row per bar; a
+// beat is an eighth note. Both 8-bar parts are played once each
 // (no repeats), then a short rest before the whole thing loops.
 static const uint16_t ALARM_BEAT_MS = 140;
-static const Note alarmTune[] = {
+static constexpr Note alarmTune[] = {
   // --- first part ---
-  { N_G6, 1 }, { N_FS6, 1 },
-  { N_G6, 2 }, { N_G5, 2 }, { N_G5, 2 }, { N_D6, 1 }, { N_C6, 1 },
-  { N_B5, 1 }, { N_D6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_G6, 1 },
-  { N_A6, 2 }, { N_A5, 2 }, { N_A5, 2 }, { N_A6, 1 }, { N_G6, 1 },
-  { N_FS6, 1 }, { N_A6, 1 }, { N_D7, 2 }, { N_D7, 2 }, { N_E7, 1 }, { N_FS7, 1 },
-  { N_G7, 1 }, { N_FS7, 1 }, { N_E7, 1 }, { N_D7, 1 }, { N_E7, 1 }, { N_D7, 1 }, { N_C7, 1 }, { N_B6, 1 },
-  { N_C7, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_G6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_E6, 1 }, { N_D6, 1 },
-  { N_E6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_A6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_C7, 1 },
-  { N_B6, 2 }, { N_G6, 2 }, { N_G6, 2 },
+  { N_CS7, 1 }, { N_C7, 1 },
+  { N_CS7, 2 }, { N_CS7, 2 }, { N_CS7, 2 }, { N_GS6, 1 }, { N_FS7, 1 },
+  { N_F7, 1 }, { N_GS6, 1 }, { N_CS7, 1 }, { N_C7, 1 }, { N_CS7, 1 }, { N_F7, 1 }, { N_DS7, 1 }, { N_CS7, 1 },
+  { N_DS7, 2 }, { N_DS7, 2 }, { N_DS7, 2 }, { N_DS7, 1 }, { N_CS7, 1 },
+  { N_C7, 1 }, { N_DS7, 1 }, { N_GS6, 2 }, { N_GS6, 2 }, { N_AS6, 1 }, { N_C7, 1 },
+  { N_CS7, 1 }, { N_C7, 1 }, { N_AS6, 1 }, { N_GS6, 1 }, { N_AS6, 1 }, { N_GS6, 1 }, { N_FS7, 1 }, { N_F7, 1 },
+  { N_FS7, 1 }, { N_F7, 1 }, { N_DS7, 1 }, { N_CS7, 1 }, { N_CS7, 1 }, { N_C7, 1 }, { N_AS6, 1 }, { N_GS6, 1 },
+  { N_AS6, 1 }, { N_CS7, 1 }, { N_C7, 1 }, { N_DS7, 1 }, { N_CS7, 1 }, { N_F7, 1 }, { N_DS7, 1 }, { N_FS7, 1 },
+  { N_F7, 2 }, { N_CS7, 2 }, { N_CS7, 2 },
   // --- second part ---
-  { N_D6, 1 }, { N_C6, 1 },
-  { N_B5, 1 }, { N_D6, 1 }, { N_G6, 1 }, { N_D6, 1 }, { N_B5, 1 }, { N_D6, 1 }, { N_G6, 1 }, { N_D6, 1 },
-  { N_E6, 2 }, { N_C6, 2 }, { N_C6, 2 }, { N_E6, 1 }, { N_D6, 1 },
-  { N_CS6, 1 }, { N_E6, 1 }, { N_A6, 1 }, { N_E6, 1 }, { N_CS6, 1 }, { N_E6, 1 }, { N_A6, 1 }, { N_E6, 1 },
-  { N_FS6, 2 }, { N_D6, 2 }, { N_D6, 2 }, { N_A6, 1 }, { N_B6, 1 },
-  { N_C7, 1 }, { N_B6, 1 }, { N_C7, 1 }, { N_D7, 1 }, { N_E7, 1 }, { N_D7, 1 }, { N_C7, 1 }, { N_B6, 1 },
-  { N_C7, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_G6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_E6, 1 }, { N_D6, 1 },
-  { N_E6, 1 }, { N_G6, 1 }, { N_FS6, 1 }, { N_A6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_C7, 1 },
-  { N_B6, 2 }, { N_G6, 2 }, { N_G6, 2 },
+  { N_GS6, 1 }, { N_FS7, 1 },
+  { N_F7, 1 }, { N_GS6, 1 }, { N_CS7, 1 }, { N_GS6, 1 }, { N_F7, 1 }, { N_GS6, 1 }, { N_CS7, 1 }, { N_GS6, 1 },
+  { N_AS6, 2 }, { N_FS7, 2 }, { N_FS7, 2 }, { N_AS6, 1 }, { N_GS6, 1 },
+  { N_G6, 1 }, { N_AS6, 1 }, { N_DS7, 1 }, { N_AS6, 1 }, { N_G6, 1 }, { N_AS6, 1 }, { N_DS7, 1 }, { N_AS6, 1 },
+  { N_C7, 2 }, { N_GS6, 2 }, { N_GS6, 2 }, { N_DS7, 1 }, { N_F7, 1 },
+  { N_FS7, 1 }, { N_F7, 1 }, { N_FS7, 1 }, { N_GS6, 1 }, { N_AS6, 1 }, { N_GS6, 1 }, { N_FS7, 1 }, { N_F7, 1 },
+  { N_FS7, 1 }, { N_F7, 1 }, { N_DS7, 1 }, { N_CS7, 1 }, { N_CS7, 1 }, { N_C7, 1 }, { N_AS6, 1 }, { N_GS6, 1 },
+  { N_AS6, 1 }, { N_CS7, 1 }, { N_C7, 1 }, { N_DS7, 1 }, { N_CS7, 1 }, { N_F7, 1 }, { N_DS7, 1 }, { N_FS7, 1 },
+  { N_F7, 2 }, { N_CS7, 2 }, { N_CS7, 2 },
   { 0, 6 },
 };
 #else
-// The original ditty, in G: four short phrases, then a pause.
+// The original ditty, transposed from G to A: four short phrases, then a pause.
 static const uint16_t ALARM_BEAT_MS = 170;
-static const Note alarmTune[] = {
-  { N_D6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_D7, 2 }, { N_B6, 1 }, { N_D7, 3 }, { 0, 1 },
-  { N_E7, 1 }, { N_D7, 1 }, { N_B6, 1 }, { N_G6, 2 }, { N_A6, 1 }, { N_B6, 3 }, { 0, 1 },
-  { N_D6, 1 }, { N_G6, 1 }, { N_B6, 1 }, { N_D7, 2 }, { N_B6, 1 }, { N_E7, 3 }, { 0, 1 },
-  { N_D7, 1 }, { N_B6, 1 }, { N_A6, 1 }, { N_G6, 2 }, { N_FS6, 1 }, { N_G6, 3 }, { 0, 5 },
+static constexpr Note alarmTune[] = {
+  { N_E7, 1 }, { N_A6, 1 }, { N_CS7, 1 }, { N_E7, 2 }, { N_CS7, 1 }, { N_E7, 3 }, { 0, 1 },
+  { N_FS7, 1 }, { N_E7, 1 }, { N_CS7, 1 }, { N_A6, 2 }, { N_B6, 1 }, { N_CS7, 3 }, { 0, 1 },
+  { N_E7, 1 }, { N_A6, 1 }, { N_CS7, 1 }, { N_E7, 2 }, { N_CS7, 1 }, { N_FS7, 3 }, { 0, 1 },
+  { N_E7, 1 }, { N_CS7, 1 }, { N_B6, 1 }, { N_A6, 2 }, { N_GS6, 1 }, { N_A6, 3 }, { 0, 5 },
 };
 #endif
 static const uint8_t ALARM_TUNE_LEN = sizeof(alarmTune) / sizeof(alarmTune[0]);
+
+// Every sound must sit in the piezo's usable octave (see config.h).
+constexpr bool inBeeperRange(unsigned hz) { return hz >= BEEPER_MIN_HZ && hz <= BEEPER_MAX_HZ; }
+constexpr bool tuneInBeeperRange() {
+  for (const Note &n : alarmTune)
+    if (n.freq != 0 && !inBeeperRange(n.freq)) return false;
+  return true;
+}
+static_assert(tuneInBeeperRange(), "alarm tune note outside BEEPER_MIN_HZ..BEEPER_MAX_HZ");
+static_assert(inBeeperRange(highTone) && inBeeperRange(lowTone) && inBeeperRange(touchBlipHz),
+              "chime/blip tone outside BEEPER_MIN_HZ..BEEPER_MAX_HZ");
 
 static Ticker alarmTicker;
 static volatile bool alarmRinging = false;  // true from the alarm firing until a touch
@@ -524,9 +474,9 @@ void runAlarm() {
   // 12 o'clock it can tie up loop() for several seconds.
   if (minute(t) == 0 && second(t) == 0 && currentMode() != MODE_SLEEP && !alarmRinging) {
     for (int i = 0; i < hr; i++) {
-      buzzerTone(highTone, 150);  // c#7
+      buzzerTone(highTone, 150);  // C#7
       delay(300);
-      buzzerTone(lowTone, 250);  // b6
+      buzzerTone(lowTone, 250);   // B6
       delay(700);
       buzzerOff();
     }
@@ -586,45 +536,14 @@ void loop() {
   }
 
   // Each touch steps to the next display mode and silences a ringing alarm.
-  // (Counted by sampleTouchPad() on the touchTicker.)
-  while (pendingTouches > 0) {
-    noInterrupts();
-    pendingTouches--;
-    interrupts();
-    lastTouchMs = millis();
+  while (touchInputTakePress()) {
     buttonPressCounter++;        // steps to the next mode (clock/stocks/sleep); see updateOledDisplay()
     stopAlarmTune();             // a touch silences an in-progress alarm
-    buzzerTone(2020, 30);  // short beep to confirm the touch registered
-    webPrint("Touch #%u: %luns (baseline %luns)\n", buttonPressCounter,
-             (unsigned long)touchPad.readingNs(), (unsigned long)touchPad.baselineNs());
-    previousTime = 0;  // redraw right away, before any (blocking) stock fetch below
-#ifdef TOUCH_DIAG
-    webPrint("  raw before press (us): %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu %lu\n",
-             pressSnap[0] / 1000, pressSnap[1] / 1000, pressSnap[2] / 1000, pressSnap[3] / 1000,
-             pressSnap[4] / 1000, pressSnap[5] / 1000, pressSnap[6] / 1000, pressSnap[7] / 1000,
-             pressSnap[8] / 1000, pressSnap[9] / 1000, pressSnap[10] / 1000, pressSnap[11] / 1000);
-    webPrint("  at %lus uptime, WiFi status %d\n", millis() / 1000, (int)WiFi.status());
-#endif
+    buzzerTone(touchBlipHz, 30); // short beep to confirm the touch registered
+    previousTime = 0;            // redraw right away, before any (blocking) stock fetch below
+    touchInputLogPress();        // after the beep, so logging can't delay the feedback
   }
-  // Log rises that didn't make it to a press, to show if the pad is set too
-  // insensitive. At most once a minute: Wi-Fi bursts at boot and a hovering
-  // hand produce several, and the dashboard log is short.
-  static uint32_t loggedNearMisses = 0;
-  static uint32_t lastNearMissLogMs = 0;
-  if (touchPad.nearMisses() != loggedNearMisses &&
-      (lastNearMissLogMs == 0 || millis() - lastNearMissLogMs >= 60000)) {
-    webPrint("Touch near-misses: %lu since last report, latest peak %luns (baseline %luns)\n",
-             (unsigned long)(touchPad.nearMisses() - loggedNearMisses),
-             (unsigned long)touchPad.lastNearMissNs(), (unsigned long)touchPad.baselineNs());
-    loggedNearMisses = touchPad.nearMisses();
-    lastNearMissLogMs = millis() | 1;
-  }
-  // A stuck pad reads as "never touched"; log when that starts and stops.
-  static bool padStuck = false;
-  if (touchPad.stuck() != padStuck) {
-    padStuck = touchPad.stuck();
-    webPrint(padStuck ? "Touch pad not responding (check wiring)\n" : "Touch pad responding again\n");
-  }
+  touchInputLogHealth();
 
   if (millis() > previousTime + 500) {  // update display twice per second
     previousTime = millis();
@@ -637,7 +556,7 @@ void loop() {
   // been untouched for 3 s: the handshake has ~0.5 s stretches where even the
   // touch Ticker can't run, long enough to swallow a whole tap, so don't start
   // one while someone is tapping through the modes.
-  handleStocks(currentMode() == MODE_STOCKS && millis() - lastTouchMs >= 3000);
+  handleStocks(currentMode() == MODE_STOCKS && touchInputMsSinceLastPress() >= 3000);
 #if !defined(ESP32)
   //We don't need to call this explicitly on ESP32 but we do on 8266
   MDNS.update();

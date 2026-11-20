@@ -80,7 +80,7 @@ class TouchPad {
   bool touched() const { return _touched; }
   bool stuck() const { return _timeoutRun >= _cfg.stuckChecks; }
   uint32_t readingNs() const { return _filteredNs; }   // filtered (median) reading; 0 while stuck()
-  uint32_t baselineNs() const { return _baselineNs; }
+  uint32_t baselineNs() const { return _baselineQ8 >> 8; }
 
   // Near misses: a rise past half the press level that fell back without
   // becoming a press. A steady trickle of these means the pad is set too
@@ -96,9 +96,9 @@ class TouchPad {
 
  private:
   uint32_t windowMedian() const;
-  bool decide(uint32_t raw, uint32_t now);
+  bool decide(uint32_t raw, uint32_t now);  // ported offline in tools/touch_watch.py replay(); keep in sync
   uint32_t windowValue(uint32_t raw) const { return raw ? raw : (uint32_t)_cfg.timeoutUs * 1000; }
-  void setBaseline(uint32_t ns) { _baselineNs = ns; _baselineQ8 = ns << 8; }
+  void setBaseline(uint32_t ns) { _baselineQ8 = ns << 8; }
 
   uint8_t _driverPin, _sensorPin;
   Config _cfg;
@@ -112,8 +112,7 @@ class TouchPad {
   uint8_t _aboveRun = 0;
   uint8_t _timeoutRun = 0;
   uint32_t _filteredNs = 0;
-  uint32_t _baselineNs = 0;
-  uint32_t _baselineQ8 = 0;   // baseline in 1/256 ns, for smooth slow tracking
+  uint32_t _baselineQ8 = 0;   // baseline in 1/256 ns (fixed point, so slow tracking still moves); 0 = not learned
   uint32_t _lastSampleMs = 0;
   uint32_t _peakNs = 0;       // highest filtered value since it rose above the release level (untouched only)
   uint32_t _nearMisses = 0;

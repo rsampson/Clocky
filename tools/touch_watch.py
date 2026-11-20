@@ -15,12 +15,14 @@ settings without re-flashing.
 """
 import argparse
 import json
+import socket
 import sys
 import time
 import urllib.request
 
 
 def watch(host, secs, out):
+    host = socket.gethostbyname(host)  # resolve clocky.local once, not on every poll
     since, presses0, lost = 0, None, 0
     sec_raw, sec_filt, last_print = [], [], time.time()
     t_end = time.time() + secs
@@ -61,24 +63,37 @@ def watch(host, secs, out):
     print(f"wrote {out}; samples lost between polls: {lost}")
 
 
-def replay(path, window, press, release, confirm, shift=10):
+TIMEOUT_NS = 1_000_000  # a timed-out reading's window value: TouchPad::Config::timeoutUs * 1000
+
+
+def replay(path, window, press, release, confirm, shift=10, stuck=12, relearn_ms=30000):
+    """Offline port of TouchPad::decide() (lib/TouchPad/src/TouchPad.cpp); keep
+    the two in sync. Defaults mirror TouchPad::Config."""
+    stuck = max(1, min(stuck, confirm - 1))  # as the TouchPad constructor clamps stuckChecks
     rows = [list(map(int, l.split(","))) for l in open(path).read().splitlines()[1:] if l]
-    raws = [r[2] for r in rows]
-    win, base, touched, above, presses, near, peak, bq = [], 0, False, 0, 0, 0, 0, 0
-    run0 = 0
-    for raw in raws:
+    win, bq, touched, above, presses, near, peak, run0, high_since = [], 0, False, 0, 0, 0, 0, 0, 0
+    for _seq, ms, raw, _filt, _t in rows:
         run0 = run0 + 1 if raw == 0 else 0
-        win = (win + [raw or 1_000_000])[-window:]  # a timeout counts as a very long reading ...
+        win = (win + [raw or TIMEOUT_NS])[-window:]  # a timeout counts as a very long reading ...
         if len(win) < window:
             continue
-        if run0 >= 12:  # ... unless it's a sustained run: pad stuck => untouched
-            touched, above = False, 0
+        if run0 >= stuck:  # ... unless it's a sustained run: pad stuck => untouched
+            touched, above, high_since, peak = False, 0, 0, 0
             continue
         r = sorted(win)[window // 2]
-        if base == 0:
-            base, bq = r, r << 8
+        if bq == 0:  # no baseline yet; never adopt one that is mostly timeouts
+            if r != TIMEOUT_NS:
+                bq = r << 8
             continue
+        base = bq >> 8
         p, rel = base + base * press // 100, base + base * release // 100
+        if r < rel:  # held above the release level too long: re-learn the baseline
+            high_since = 0
+        elif high_since == 0:
+            high_since = ms | 1
+        elif ms - high_since >= relearn_ms and r != TIMEOUT_NS:  # never onto a timeout
+            bq, touched, above, high_since, peak = r << 8, False, 0, 0, 0
+            continue
         if touched:
             touched = r >= rel
             continue
@@ -97,9 +112,8 @@ def replay(path, window, press, release, confirm, shift=10):
         peak = 0
         rq = r << 8
         bq = bq - ((bq - rq) >> 4) if rq < bq else bq + ((rq - bq) >> shift)
-        base = bq >> 8
     print(f"window {window} press +{press}% release +{release}% confirm {confirm}: "
-          f"{presses} presses, {near} near-misses over {len(raws)} samples")
+          f"{presses} presses, {near} near-misses over {len(rows)} samples")
 
 
 def main():
@@ -112,8 +126,10 @@ def main():
         ap.add_argument("--release", type=int, default=8)
         ap.add_argument("--confirm", type=int, default=15)
         ap.add_argument("--shift", type=int, default=10)
+        ap.add_argument("--stuck", type=int, default=12)
+        ap.add_argument("--relearn", type=int, default=30000, help="ms")
         a = ap.parse_args()
-        replay(a.file, a.window, a.press, a.release, a.confirm, a.shift)
+        replay(a.file, a.window, a.press, a.release, a.confirm, a.shift, a.stuck, a.relearn)
         return
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="clocky.local")

@@ -50,6 +50,21 @@ static uint32_t nextFetchMs = 0;   // millis() before which we won't try again
 static bool fetchScheduled = false;  // false = never tried, fetch as soon as wanted
 static int8_t lastResult = -1;     // -1 none yet, 0 failed, 1 ok — so we only log changes
 
+// Records a fetch outcome, logging the message only when the outcome changes
+// (so a failure that repeats every minute logs once). Returns ok.
+static bool reportResult(bool ok, const char *fmt, ...) {
+  if (lastResult != (int8_t)ok) {
+    char msg[128];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    webPrint("%s", msg);
+  }
+  lastResult = ok;
+  return ok;
+}
+
 // Pulls the number following `"key":` out of the JSON text. The reply is
 // small and flat enough that a full JSON parse (and its extra heap) isn't
 // worth it. The leading quote in the search key matters: it stops
@@ -115,11 +130,8 @@ static bool fetchAll() {
 
   if (ESP.getMaxFreeBlockSize() < max(rxInMainHeap, TLS_OTHER_BLOCK) ||
       ESP.getFreeHeap() < rxInMainHeap + TLS_OTHER_TOTAL) {
-    if (lastResult != 0) {
-      webPrint("Stocks: not enough memory (%u free, %u block)\n", (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxFreeBlockSize());
-    }
-    lastResult = 0;
-    return false;
+    return reportResult(false, "Stocks: not enough memory (%u free, %u block)\n",
+                        (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxFreeBlockSize());
   }
   client.setBufferSizes(TLS_RX_BUF, txBuf);
 #endif
@@ -156,13 +168,7 @@ static bool fetchAll() {
   }
   client.stop();
 
-  if (!ok) {
-    if (lastResult != 0) {
-      webPrint("Stocks: fetch failed (%d), heap %u\n", code, (unsigned)ESP.getFreeHeap());
-    }
-    lastResult = 0;
-    return false;
-  }
+  if (!ok) return reportResult(false, "Stocks: fetch failed (%d), heap %u\n", code, (unsigned)ESP.getFreeHeap());
 
   for (int i = 0; i < NUM_STOCKS; i++) {
     stocks[i].price = price[i];
@@ -170,11 +176,7 @@ static bool fetchAll() {
   }
   haveData = true;
   lastGoodMs = millis();
-  if (lastResult != 1) {
-    webPrint("Stocks: Dow %.0f S&P %.0f Nasdaq %.0f\n", stocks[0].price, stocks[1].price, stocks[2].price);
-  }
-  lastResult = 1;
-  return true;
+  return reportResult(true, "Stocks: Dow %.0f S&P %.0f Nasdaq %.0f\n", stocks[0].price, stocks[1].price, stocks[2].price);
 }
 
 bool stocksFresh() {

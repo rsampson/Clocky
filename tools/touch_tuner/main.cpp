@@ -11,11 +11,12 @@
 //
 // Each sample is measured two ways and at several pad-discharge times, so one
 // session answers: how much does a touch change the reading, how noisy is it,
-// and how short can the (currently 10 ms, blocking) discharge wait be?
-//   rise: pad discharged to 0 V, driver goes HIGH, time until SensorPin reads HIGH
-//   fall: pad charged to Vcc,   driver goes LOW,  time until SensorPin reads LOW
-// Times are in nanoseconds, from the CPU cycle counter (12.5 ns per tick at
-// 80 MHz) and with direct GPIO register access, instead of micros() (1 us).
+// and how short can the discharge wait (TouchPad::Config::settleUs) be?
+//   rise: exactly what the firmware measures -- TouchPad::measureNs() from
+//         lib/TouchPad (IRAM, cycle counter, GPIO registers), one Config per
+//         settle time
+//   fall: pad charged to Vcc, driver goes LOW, time until SensorPin reads LOW
+//         (not used by the firmware; kept for comparison)
 //
 // Wi-Fi is brought up with Clocky's stored credentials so the readings include
 // the same radio interrupt noise the real firmware lives with.
@@ -31,22 +32,19 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <TouchPad.h>
+#include "../../src/config.h"  // DriverPin, SensorPin, BUZZER_PIN: same wiring as the clock
 
 #if !defined(ESP8266)
 #error "touch_tuner uses ESP8266 GPIO registers"
 #endif
 
-// Same wiring as src/config.h.
-static const uint8_t DRIVER_PIN = D3;  // GPIO0, through 300k to the pad
-static const uint8_t SENSOR_PIN = D7;  // GPIO13, straight to the pad
-static const uint8_t BUZZER_PIN = D6;
+static const uint32_t DRV_MASK = 1UL << DriverPin;  // GPIO n <-> bit n on ESP8266 (n < 16)
+static const uint32_t SEN_MASK = 1UL << SensorPin;
+static const uint32_t TIMEOUT_US = TouchPad::Config().timeoutUs;
 
-static const uint32_t DRV_MASK = 1UL << DRIVER_PIN;  // GPIO n <-> bit n on ESP8266 (n < 16)
-static const uint32_t SEN_MASK = 1UL << SENSOR_PIN;
-static const uint32_t TIMEOUT_US = 1000;  // firm touches reach ~165 us with 300k; scale up with a larger resistor
-
-// Discharge/charge waits to compare. 10000 us is what Clocky does today.
-static const uint32_t SETTLE_US[] = {5, 50, 500, 10000};
+// Discharge/charge waits to compare, around the firmware's current settleUs.
+static const uint16_t SETTLE_US[] = {5, 10, 50, TouchPad::Config().settleUs, 500};
 static const int NUM_SETTLE = sizeof(SETTLE_US) / sizeof(SETTLE_US[0]);
 
 Adafruit_SSD1306 display(128, 32, &Wire, -1);
@@ -78,54 +76,34 @@ static int phaseIdx = 0;
 static bool inReady = true;
 static uint32_t phaseStart = 0;
 
-static inline uint32_t cyclesToNs(uint32_t c) { return (uint64_t)c * 1000 / ESP.getCpuFreqMHz(); }
-
-static void settle(uint32_t us) {
-  if (us >= 1000) delay(us / 1000); else delayMicroseconds(us);
-}
-
-// Pad at 0 V, then time the rise through the resistor. Returns ns, 0 on timeout.
-static uint32_t measureRise(uint32_t settleUs) {
-  GPOC = DRV_MASK;
-  pinMode(SENSOR_PIN, OUTPUT);
-  GPOC = SEN_MASK;
-  settle(settleUs);
-  pinMode(SENSOR_PIN, INPUT);
-
-  const uint32_t limit = TIMEOUT_US * ESP.getCpuFreqMHz();
-  noInterrupts();
-  uint32_t t0 = ESP.getCycleCount();
-  GPOS = DRV_MASK;
-  uint32_t dt = 0;
-  while (!(GPI & SEN_MASK)) {
-    dt = ESP.getCycleCount() - t0;
-    if (dt > limit) break;
-  }
-  dt = ESP.getCycleCount() - t0;
-  interrupts();
-  return dt > limit ? 0 : cyclesToNs(dt);
+// Rise time exactly as the firmware measures it.
+static uint32_t measureRise(uint16_t settleUs) {
+  TouchPad::Config cfg;
+  cfg.settleUs = settleUs;
+  return TouchPad(DriverPin, SensorPin, cfg).measureNs();
 }
 
 // Pad at Vcc, then time the fall through the resistor. Returns ns, 0 on timeout.
-static uint32_t measureFall(uint32_t settleUs) {
+// IRAM_ATTR for the same reason as TouchPad::measureNs(): a flash cache miss
+// mid-measurement would add a few microseconds.
+static uint32_t IRAM_ATTR measureFall(uint16_t settleUs) {
   GPOS = DRV_MASK;
-  pinMode(SENSOR_PIN, OUTPUT);
+  pinMode(SensorPin, OUTPUT);
   GPOS = SEN_MASK;
-  settle(settleUs);
-  pinMode(SENSOR_PIN, INPUT);
+  delayMicroseconds(settleUs);
+  pinMode(SensorPin, INPUT);
 
-  const uint32_t limit = TIMEOUT_US * ESP.getCpuFreqMHz();
+  const uint32_t tpu = ESP.getCpuFreqMHz();
+  const uint32_t limit = TIMEOUT_US * tpu;
+  uint32_t dt;
   noInterrupts();
-  uint32_t t0 = ESP.getCycleCount();
+  const uint32_t t0 = ESP.getCycleCount();
   GPOC = DRV_MASK;
-  uint32_t dt = 0;
-  while (GPI & SEN_MASK) {
+  do {
     dt = ESP.getCycleCount() - t0;
-    if (dt > limit) break;
-  }
-  dt = ESP.getCycleCount() - t0;
+  } while ((GPI & SEN_MASK) && dt <= limit);
   interrupts();
-  return dt > limit ? 0 : cyclesToNs(dt);
+  return dt > limit ? 0 : (dt / tpu) * 1000 + (dt % tpu) * 1000 / tpu;
 }
 
 static void show(const char *big, const char *small, int secsLeft) {
@@ -144,6 +122,8 @@ static void show(const char *big, const char *small, int secsLeft) {
   display.display();
 }
 
+static uint32_t phaseLenMs() { return inReady ? READY_MS : PHASES[phaseIdx].seconds * 1000UL; }
+
 static const char *currentLabel() {
   if (mode == FREE) return "free";
   if (mode != GUIDED) return nullptr;
@@ -155,8 +135,7 @@ static void stepGuide() {
   static uint32_t lastDraw = 0;
   uint32_t now = millis();
   if (mode == GUIDED) {
-    uint32_t len = inReady ? READY_MS : PHASES[phaseIdx].seconds * 1000UL;
-    if (now - phaseStart >= len) {
+    if (now - phaseStart >= phaseLenMs()) {
       phaseStart = now;
       if (inReady) {
         inReady = false;
@@ -181,8 +160,7 @@ static void stepGuide() {
     case DONE:   show("DONE", "thanks!", -1); break;
     case GUIDED: {
       const Phase &p = PHASES[phaseIdx];
-      uint32_t len = inReady ? READY_MS : p.seconds * 1000UL;
-      int left = (len - (now - phaseStart) + 999) / 1000;
+      int left = (phaseLenMs() - (now - phaseStart) + 999) / 1000;
       if (inReady) {
         char nxt[24];
         snprintf(nxt, sizeof(nxt), "next: %s", p.big);
@@ -197,8 +175,8 @@ static void stepGuide() {
 
 void setup() {
   Serial.begin(115200);
-  pinMode(DRIVER_PIN, OUTPUT);
-  pinMode(SENSOR_PIN, INPUT);
+  pinMode(DriverPin, OUTPUT);
+  pinMode(SensorPin, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
   Wire.begin();
@@ -236,13 +214,14 @@ void loop() {
   const char *label = currentLabel();
   if (!label) { delay(10); return; }
 
-  // One round = every settle time, rise and fall each. ~21 ms per round,
-  // ~4.5 KB/s of output: comfortably inside 115200 baud.
+  // One round = every settle time, rise and fall each (~1-2 ms), then a 20 ms
+  // pause (which also lets Wi-Fi run): ~45 rounds/s, ~6 KB/s of output,
+  // comfortably inside 115200 baud.
   for (int i = 0; i < NUM_SETTLE; i++) {
     uint32_t r = measureRise(SETTLE_US[i]);
     uint32_t f = measureFall(SETTLE_US[i]);
     Serial.printf("D,%s,%lu,%lu,%lu,%lu\n", label, (unsigned long)millis(),
                   (unsigned long)SETTLE_US[i], (unsigned long)r, (unsigned long)f);
   }
-  yield();
+  delay(20);
 }

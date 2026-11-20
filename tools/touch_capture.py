@@ -12,7 +12,6 @@ firmware prints "# done". Then it runs the analysis on what it recorded.
 """
 import argparse
 import csv
-import glob
 import statistics
 import sys
 import time
@@ -20,9 +19,10 @@ from collections import defaultdict
 
 
 def find_port():
-    ports = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+    from serial.tools import list_ports  # from the PlatformIO penv
+    ports = sorted(p.device for p in list_ports.comports() if "USB" in p.device or "ACM" in p.device)
     if not ports:
-        sys.exit("no /dev/ttyUSB* or /dev/ttyACM* found; pass --port")
+        sys.exit("no USB serial port found; pass --port")
     return ports[0]
 
 
@@ -56,12 +56,11 @@ def capture(port, out, timeout_s):
     print(f"wrote {n} data lines to {out}")
 
 
-def pct(sorted_vals, p):
-    if not sorted_vals:
-        return 0
-    k = (len(sorted_vals) - 1) * p / 100
-    lo, hi = int(k), min(int(k) + 1, len(sorted_vals) - 1)
-    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (k - lo)
+def pct(vals, p):
+    """p-th percentile (1..99), linearly interpolated."""
+    if len(vals) < 2:
+        return vals[0] if vals else 0
+    return statistics.quantiles(vals, n=100, method="inclusive")[p - 1]
 
 
 def analyse(paths):
@@ -72,18 +71,17 @@ def analyse(paths):
     for path in paths:
         with open(path) as f:
             rows.extend(csv.reader(f))
-    if True:
-        for row in rows:
-            if not row or row[0] != "D" or len(row) != 6:
-                continue
-            _, phase, _ms, settle, rise, fall = row
-            settle, rise, fall = int(settle), int(rise), int(fall)
-            if rise == 0 or fall == 0:
-                timeouts[(phase, settle)] += 1
-                continue
-            data[(settle, "rise")][phase].append(rise)
-            data[(settle, "fall")][phase].append(fall)
-            data[(settle, "sum")][phase].append(rise + fall)
+    for row in rows:
+        if not row or row[0] != "D" or len(row) != 6:
+            continue
+        _, phase, _ms, settle, rise, fall = row
+        settle, rise, fall = int(settle), int(rise), int(fall)
+        if rise == 0 or fall == 0:
+            timeouts[(phase, settle)] += 1
+            continue
+        data[(settle, "rise")][phase].append(rise)
+        data[(settle, "fall")][phase].append(fall)
+        data[(settle, "sum")][phase].append(rise + fall)
 
     if timeouts:
         print("timeouts (phase, settle_us): count ->", dict(timeouts))

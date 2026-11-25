@@ -33,6 +33,17 @@ unsigned int buttonPressCounter;
 enum DisplayMode { MODE_CLOCK = 0, MODE_STOCKS = 1, MODE_SLEEP = 2, NUM_MODES = 3 };
 static inline int currentMode() { return buttonPressCounter % NUM_MODES; }
 
+// Stock fetches wait until the pad has been untouched this long: the TLS
+// handshake has ~0.5 s stretches where even the touch Ticker can't run, long
+// enough to swallow a whole tap, so don't start one while someone is tapping
+// through the modes.
+static const uint32_t STOCK_FETCH_QUIET_MS = 3000;
+// Entering stock mode without fresh data shows a "Stocks..." placeholder (so
+// the touch visibly did something) for at most this long -- the quiet wait
+// plus room for the fetch -- before falling back to the plain clock face.
+static const uint32_t STOCK_PLACEHOLDER_MS = STOCK_FETCH_QUIET_MS + 7000;
+static uint32_t stockModeEnteredMs = 0;
+
 #if defined(ESP32)
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -316,11 +327,18 @@ void updateOledDisplay(void) {
     case MODE_STOCKS:              // stock-index mode: Dow / S&P 500 / Nasdaq
       digitalWrite(ledPin, LOW);  // turn on the night lite
       display.stopscroll();
-      // Stock mode without fresh data (still fetching, WiFi down, fetch
-      // failed, data gone stale) behaves exactly like the desk clock until
-      // handleStocks() in loop() gets good values.
+      // Stock mode without fresh data: right after entering it (while the
+      // first fetch is pending) show a placeholder, so the mode change is
+      // visible at once; after that (WiFi down, fetch failed, data gone
+      // stale) it behaves exactly like the desk clock until handleStocks()
+      // in loop() gets good values.
       if (currentMode() == MODE_STOCKS && stocksFresh()) {
         prepStockFace(buf);
+      } else if (currentMode() == MODE_STOCKS && currentWifiState == WIFI_STATE_CONNECTED &&
+                 millis() - stockModeEnteredMs < STOCK_PLACEHOLDER_MS) {
+        display.setFont(&FreeSans12pt7b);
+        display.setCursor(19, 25);  // centred: the text is 90 px wide
+        sprintf(buf, "Stocks...");
       } else {
         prepClockFace(buf);
       }
@@ -538,6 +556,7 @@ void loop() {
   // Each touch steps to the next display mode and silences a ringing alarm.
   while (touchInputTakePress()) {
     buttonPressCounter++;        // steps to the next mode (clock/stocks/sleep); see updateOledDisplay()
+    if (currentMode() == MODE_STOCKS) stockModeEnteredMs = millis();
     stopAlarmTune();             // a touch silences an in-progress alarm
     buzzerTone(touchBlipHz, 30); // short beep to confirm the touch registered
     previousTime = 0;            // redraw right away, before any (blocking) stock fetch below
@@ -552,11 +571,9 @@ void loop() {
 
   // Stock mode only: fetch/refresh the index values. Blocks for a few seconds
   // per fetch (TLS handshake), so it runs after the display update above and
-  // only while the mode is actually selected. It also waits until the pad has
-  // been untouched for 3 s: the handshake has ~0.5 s stretches where even the
-  // touch Ticker can't run, long enough to swallow a whole tap, so don't start
-  // one while someone is tapping through the modes.
-  handleStocks(currentMode() == MODE_STOCKS && touchInputMsSinceLastPress() >= 3000);
+  // only while the mode is actually selected, and only once the pad has been
+  // untouched for STOCK_FETCH_QUIET_MS (see there).
+  handleStocks(currentMode() == MODE_STOCKS && touchInputMsSinceLastPress() >= STOCK_FETCH_QUIET_MS);
 #if !defined(ESP32)
   //We don't need to call this explicitly on ESP32 but we do on 8266
   MDNS.update();

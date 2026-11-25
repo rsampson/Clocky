@@ -22,6 +22,8 @@ pio run -t clean             # clean build artifacts
 
 There is no test suite configured (`test/` only contains PlatformIO's placeholder README).
 
+The web dashboard can be developed without hardware: `python3 tools/mock_server.py` (stdlib only) serves the real `INDEX_HTML`/`STYLE_CSS`/`APP_JS` by regex-extracting the raw-string literals (`R"HTML(...)HTML"`, `R"CSS(`, `R"JS(`) straight out of `src/web_assets.cpp`, and fakes the `/api/*` routes in memory, at `http://localhost:8080`. Keep those raw-string delimiters intact when editing `web_assets.cpp`, and mirror any new or changed `/api/*` route (or `/api/status` field) in the mock. `preview.html` at the repo root is a standalone static design mockup of the dashboard, not served by the firmware.
+
 `platformio.ini` also has a `touch_tuner` env (not built by a plain `pio run`; `default_envs = esp12e`) for re-tuning the touch pad — see the touch pad paragraph below:
 
 ```bash
@@ -64,4 +66,4 @@ Persistent settings (Wi-Fi SSID/password, alarm hour/minute, time zone) are stor
 
 ## Repository layout note
 
-`platformio.ini`, `include/`, `lib/`, `test/` live at the repo root; actual firmware source is under `src/`. `src/.gitignore` is a leftover from the pre-PlatformIO layout (generic C++ object-file patterns) and is largely redundant with the root `.gitignore`, which also excludes `.pio/`, `src/build/` (stale Arduino-IDE build output), and `compile_commands.json`.
+`platformio.ini`, `include/`, `lib/`, `test/` live at the repo root; actual firmware source is under `src/`. `hardware/` holds the KiCad PCB project (`Clocky.kicad_sch`/`.kicad_pcb`, a project-local footprint library `Clocky.pretty/`, logo artwork) and JLCPCB fab outputs under `hardware/manufacturing/jlcpcb/` (gerbers, BOM, and `JLCPCB-fabrication-instructions.md` with the order-form settings for the current board rev); keep the pin assignments in `src/config.h` consistent with the schematic. `src/.gitignore` is a leftover from the pre-PlatformIO layout (generic C++ object-file patterns) and is largely redundant with the root `.gitignore`, which also excludes `.pio/`, `src/build/` (stale Arduino-IDE build output), and `compile_commands.json`.
